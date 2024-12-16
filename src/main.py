@@ -3,11 +3,14 @@ from os import path as osp
 import os
 import shutil
 import sys
-from typing import Callable, List, Tuple
+from typing import Callable, Dict, List, Tuple
 import tabulate
-from pious.pio import aggregate
+from pious.pio import aggregate, Line
+from pious.hands import Hand
+from pious.hand_categories import HandCategorizer
 import textwrap
 import numpy as np
+import pandas as pd
 
 banner = f"""
 Create an aggregation report
@@ -30,6 +33,7 @@ def main():
     parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite results of a computation"
     )
+    parser.add_argument("--progress", action="store_true", help="Print progress bar")
     args = parser.parse_args()
 
     if not osp.exists(args.cfr_file_or_sim_dir):
@@ -66,15 +70,21 @@ def main():
             sys.exit(1)
 
     hand_categories = get_hand_category_functions()
-    conf = aggregate.AggregationConfig(extra_columns=hand_categories)
+    print(hand_categories)
+    flat_categories = []
+    for super_cat_name, sub_cats in hand_categories:
+        for sub_cat_name, sub_cat in sub_cats:
+            flat_categories.append((f"{super_cat_name}:{sub_cat_name}", sub_cat))
+
+    conf = aggregate.AggregationConfig(extra_columns=flat_categories)
     if osp.isdir(args.cfr_file_or_sim_dir):
         reports = aggregate.aggregate_files_in_dir(
-            args.cfr_file_or_sim_dir, lines, conf=conf
+            args.cfr_file_or_sim_dir, lines, conf=conf, print_progress=args.progress
         )
         print(reports.keys())
     elif osp.isfile(args.cfr_file_or_sim_dir):
         reports = aggregate.aggregate_single_file(
-            args.cfr_file_or_sim_dir, lines, conf=conf
+            args.cfr_file_or_sim_dir, lines, conf=conf, print_progress=args.progress
         )
         pass
     else:
@@ -100,88 +110,260 @@ def main():
         os.makedirs(out_dir)
         for line in reports:
             df = reports[line]
-            csv_file_name = (
-                osp.join(out_dir, line.line_str.replace("r:0:", "").replace(":", "_"))
-                + ".csv"
-            )
-            print(csv_file_name)
-            df.to_csv(csv_file_name, float_format="%.2f", index=False, na_rep="NaN")
+            line_dir = make_line_directory(out_dir, line)
+            sub_reports = get_sub_reports(df)
+            for srn in sub_reports:
+                sr = sub_reports[srn]
+                csv_file_name = osp.join(line_dir, srn) + ".csv"
+                sr.to_csv(csv_file_name, float_format="%.2f", index=False, na_rep="NaN")
+
+
+def make_line_directory(out_dir, line: Line) -> str:
+    """
+    Create a new directory for the current
+    """
+    if isinstance(line, Line):
+        line_str = line.line_str
+    elif isinstance(line, str):
+        line_str = line
+    else:
+        raise RuntimeError(f"Illegal line {line}: must be pious.pio.Line or str")
+    line_str = line_str.replace("r:0", "r0").replace(":", "_")
+    print("outdir", out_dir)
+    line_dir = osp.join(out_dir, line_str)
+    print(f"Making line_dir: {line_dir}")
+    os.makedirs(line_dir)
+    return line_dir
+
+
+def get_sub_reports(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    """
+    Collect sub reports by splitting column names on first ":"
+    """
+    unsplit_columns = []
+    sub_reports: Dict[str, List[str]] = {}
+    for column_name in df.columns:
+        if ":" in column_name:
+            key = column_name.split(":")[0]
+            sub_reports.setdefault(key, [])
+            sub_reports[key].append(column_name)
+        else:
+            unsplit_columns.append(column_name)
+
+    left_columns = []
+    right_columns = []
+    for col in unsplit_columns:
+        if "freq" in col.lower():
+            right_columns.append(col)
+        elif "ev" in col.lower():
+            right_columns.append(col)
+        elif "eq" in col.lower():
+            right_columns.append(col)
+        elif col.lower() in ("flop", "turn", "river"):
+            left_columns.append(col)
+        else:
+            print("Skipping column from subreport:", col)
+    # Now, map each sub_report to a dataframe
+    result: Dict[str, pd.DataFrame] = {}
+    result["Aggregation"] = df[unsplit_columns]
+    for srn in sub_reports:
+        column_names = sub_reports[srn]
+        column_names = left_columns + column_names + right_columns
+
+        df2 = df[column_names]
+        df2.columns = df2.columns.str.removeprefix(srn + ":")
+        df2 = df2.dropna(axis=1, how="all")
+        result[srn] = df2
+    return result
 
 
 def create_compute_action_freqs_closure(
+    hand_query: str,
     action_predicate: Callable = lambda a: a.startswith("b"),
-    hand_filter: Callable = lambda hd: hd.is_pair(),
     weight_type="MATCHUPS",
 ):
     weight_type = weight_type.upper()
 
     def f(spot: aggregate.SpotData):
-        pos_idx = spot.node.get_position_idx()
-        hds = spot.hand_details(pos_idx=spot.node.get_position_idx())
-        strat = spot.strategy()
-        actions = spot.available_actions()
+        df = spot.hands_df().query(hand_query)
+        actions = [a for a in spot.available_actions() if action_predicate(a)]
+        action_freq_column_names = [a + "_freq" for a in actions]
+        action_columns = df[action_freq_column_names].sum(axis=1)
 
-        # Each entry is a betting action along with the frequencies of each hand
-        # taking that action
-        bet_freqs = [freqs for (a, freqs) in zip(actions, strat) if action_predicate(a)]
+        result = np.nan
         total_weights = 0.0
-
         if weight_type == "MATCHUPS":
-            weights = spot.matchups(pos_idx)
+            result = df["matchups"].dot(action_columns)
+            total_weights = df["matchups"].sum()
         elif weight_type == "RANGE":
-            weights = spot.range(pos_idx).range_array
+            result = df["range"].dot(action_columns)
+            total_weights = df["range"].sum()
         else:
             print(f"Warning: unrecognized weight type {weight_type}, using 'MATCHUPS'")
-            weights = spot.matchups(pos_idx)
-
-        # Iterate over every hand and accumulate the total (unnormalized)
-        # frequencies of taking that action (this will be normalized at return)
-        filtered_action_freq = 0.0
-        for hand_idx, hd in enumerate(hds):
-            if hd is None or not hand_filter(hd):
-                continue
-
-            # Compute how much this hand contributes to overall frequency (mus)
-            # and update the total number of matchups for all pairs
-            hand_weight = weights[hand_idx]
-            total_weights += hand_weight
-
-            # Measure the frequency of the desired action set
-            hand_bet_freq = sum([freqs[hand_idx] for freqs in bet_freqs])
-            filtered_action_freq += hand_bet_freq * hand_weight
+            result = df["matchups"].dot(action_columns)
+            total_weights = df["matchups"]
 
         if total_weights == 0.0:
             return np.nan
-        return 100 * filtered_action_freq / total_weights
+        return 100 * result / total_weights
 
     return f
 
 
-def get_hand_category_functions() -> List[Tuple[str, Callable]]:
+def is_overpair(h: Hand):
+    if not h.is_pair():
+        return False
+    (pair_type, board_cards_seen, _) = HandCategorizer.get_pair_category(h)
+    return pair_type == HandCategorizer.POCKET_PAIR and board_cards_seen == 0
+
+
+def is_underpair(h: Hand, strength):
+    if not h.is_pair():
+        return False
+    (pair_type, board_cards_seen, _) = HandCategorizer.get_pair_category(h)
+    return pair_type == HandCategorizer.POCKET_PAIR and board_cards_seen == strength
+
+
+def is_pair_with_qualities(h: Hand, pair_strength, kicker_value=None):
+    if not h.is_pair():
+        return False
+    (pair_type, board_cards_seen, kicker) = HandCategorizer.get_pair_category(h)
+    return (
+        pair_type == HandCategorizer.REGULAR_PAIR
+        and board_cards_seen == pair_strength
+        and (kicker_value is None or kicker_value == kicker)
+    )
+
+
+def is_high_card_with_qualities(
+    h: Hand, p_top_card, p_bottom_card=None, kicker_value=None
+):
+    if not h.is_high_card():
+        return False
+    try:
+        (top, bottom) = HandCategorizer.get_high_card_category(h)
+    except Exception as e:
+        print(h)
+        raise e
+    return (p_top_card is None or p_top_card == top) and (
+        p_bottom_card is None or p_bottom_card == bottom
+    )
+
+
+def get_hand_category_functions() -> List[Tuple[str, List[Tuple[str, Callable]]]]:
+    def cc(predicate):
+        return create_compute_action_freqs_closure(predicate, is_bet, wt)
 
     is_bet = lambda a: a.startswith("b")
-    is_high_card = lambda h: h.is_high_card()
-    is_pair = lambda h: h.is_pair()
-    is_2pair = lambda h: h.is_two_pair()
-    is_trips = lambda h: h.is_trips()
-    is_straight = lambda h: h.is_straight()
-    is_flush = lambda h: h.is_flush()
-    is_full_house = lambda h: h.is_full_house()
-    is_quads = lambda h: h.is_quads()
-    is_straight_flush = lambda h: h.is_straight_flush()
+    # is_high_card = lambda h: h.is_high_card()
+    # is_2pair = lambda h: h.is_two_pair()
+    # is_trips = lambda h: h.is_trips()
+    # is_straight = lambda h: h.is_straight()
+    # is_flush = lambda h: h.is_flush()
+    # is_full_house = lambda h: h.is_full_house()
+    # is_quads = lambda h: h.is_quads()
+    # is_straight_flush = lambda h: h.is_straight_flush()
     wt = "MATCHUPS"
 
-    create_closure = create_compute_action_freqs_closure
+    basic_categories = [
+        ("HighCard", cc("hand_type == 0")),
+        ("Pair", cc("hand_type == 1")),
+        ("TwoPair", cc("hand_type == 2")),
+        ("Trips", cc("hand_type == 3")),
+        ("Straight", cc("hand_type == 4")),
+        ("Flush", cc("hand_type == 5")),
+        ("FullHouse", cc("hand_type == 6")),
+        ("Quads", cc("hand_type == 7")),
+        ("StraightFlush", cc("hand_type == 8")),
+    ]
+
+    pair_subcategories = [
+        ("OverPair", cc("pair_type == 0 and pair_cards_seen == 0")),
+        ("TopPair", cc("pair_type == 2 and pair_cards_seen == 1")),
+        ("UnderPair(1)", cc("pair_type == 0 and pair_cards_seen == 1")),
+        ("2ndPair", cc("pair_type == 2 and pair_cards_seen == 2")),
+        ("UnderPair(2)", cc("pair_type == 0 and pair_cards_seen == 2")),
+        ("3rdPair", cc("pair_type == 2 and pair_cards_seen == 3")),
+        ("UnderPair(3)", cc("pair_type == 0 and pair_cards_seen == 3")),
+        ("4thPair", cc("pair_type == 2 and pair_cards_seen == 4")),
+        ("UnderPair(4)", cc("pair_type == 0 and pair_cards_seen == 4")),
+        ("5thPair", cc("pair_type == 2 and pair_cards_seen == 5")),
+        ("UnderPair(5)", cc("pair_type == 0 and pair_cards_seen == 5")),
+    ]
+
+    top_pair_subcategories = [
+        ("[1]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 1")),
+        ("[2]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 2")),
+        ("[3]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 3")),
+        ("[4]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 4")),
+        ("[5]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 5")),
+        ("[6]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 6")),
+        ("[7]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 7")),
+        ("[8]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 8")),
+        ("[9]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 9")),
+        ("[10]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 10")),
+        ("[11]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 11")),
+    ]
+
+    second_pair_subcategories = [
+        ("[1]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 1")),
+        ("[2]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 2")),
+        ("[3]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 3")),
+        ("[4]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 4")),
+        ("[5]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 5")),
+        ("[6]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 6")),
+        ("[7]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 7")),
+        ("[8]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 8")),
+        ("[9]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 9")),
+        ("[10]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 10")),
+        ("[11]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 11")),
+    ]
+
+    third_pair_subcategories = [
+        ("[1]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 1")),
+        ("[2]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 2")),
+        ("[3]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 3")),
+        ("[4]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 4")),
+        ("[5]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 5")),
+        ("[6]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 6")),
+        ("[7]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 7")),
+        ("[8]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 8")),
+        ("[9]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 9")),
+        ("[10]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 10")),
+        ("[11]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 11")),
+    ]
+
+    fourth_pair_subcategories = [
+        ("[1]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 1")),
+        ("[2]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 2")),
+        ("[3]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 3")),
+        ("[4]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 4")),
+        ("[5]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 5")),
+        ("[6]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 6")),
+        ("[7]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 7")),
+        ("[8]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 8")),
+        ("[9]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 9")),
+        ("[10]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 10")),
+        ("[11]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 11")),
+    ]
+
+    high_card_subcategories = [
+        ("[0]", cc("high_card_1_type == 0")),
+        ("[1]", cc("high_card_1_type == 1")),
+        ("[2]", cc("high_card_1_type == 2")),
+        ("[3]", cc("high_card_1_type == 3")),
+        ("[4]", cc("high_card_1_type == 4")),
+        ("FlushDraw", cc("hand_type == 0 and flush_type == 'FLUSH_DRAW'")),
+    ]
+
     return [
-        ("HighCard", create_closure(is_bet, is_high_card, wt)),
-        ("Pair", create_closure(is_bet, is_pair, wt)),
-        ("TwoPair", create_closure(is_bet, is_2pair, wt)),
-        ("Trips", create_closure(is_bet, is_trips, wt)),
-        ("Straight", create_closure(is_bet, is_straight, wt)),
-        ("Flush", create_closure(is_bet, is_flush, wt)),
-        ("FullHouse", create_closure(is_bet, is_full_house, wt)),
-        ("Quads", create_closure(is_bet, is_quads, wt)),
-        ("StraightFlush", create_closure(is_bet, is_straight_flush, wt)),
+        ("Overview", basic_categories),
+        ("Pairs", pair_subcategories),
+        ("TopPair", top_pair_subcategories),
+        ("2ndPair", second_pair_subcategories),
+        ("3rdPair", third_pair_subcategories),
+        ("4thPair", fourth_pair_subcategories),
+        ("High", high_card_subcategories),
     ]
 
 
