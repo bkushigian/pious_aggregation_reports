@@ -5,7 +5,7 @@ import shutil
 import sys
 from typing import Callable, Dict, List, Tuple
 import tabulate
-from pious.pio import aggregate, Line
+from pious.pio import aggregate, Line, Node
 from pious.hands import Hand
 from pious.hand_categories import HandCategorizer
 import textwrap
@@ -70,7 +70,6 @@ def main():
             sys.exit(1)
 
     hand_categories = get_hand_category_functions()
-    print(hand_categories)
     flat_categories = []
     for super_cat_name, sub_cats in hand_categories:
         for sub_cat_name, sub_cat in sub_cats:
@@ -79,12 +78,20 @@ def main():
     conf = aggregate.AggregationConfig(extra_columns=flat_categories)
     if osp.isdir(args.cfr_file_or_sim_dir):
         reports = aggregate.aggregate_files_in_dir(
-            args.cfr_file_or_sim_dir, lines, conf=conf, print_progress=args.progress
+            args.cfr_file_or_sim_dir,
+            lines,
+            conf=conf,
+            conf_callback=conf_callback,
+            print_progress=args.progress,
         )
         print(reports.keys())
     elif osp.isfile(args.cfr_file_or_sim_dir):
         reports = aggregate.aggregate_single_file(
-            args.cfr_file_or_sim_dir, lines, conf=conf, print_progress=args.progress
+            args.cfr_file_or_sim_dir,
+            lines,
+            conf=conf,
+            conf_callback=conf_callback,
+            print_progress=args.progress,
         )
         pass
     else:
@@ -116,6 +123,10 @@ def main():
                 sr = sub_reports[srn]
                 csv_file_name = osp.join(line_dir, srn) + ".csv"
                 sr.to_csv(csv_file_name, float_format="%.2f", index=False, na_rep="NaN")
+
+
+def conf_callback(node: Node, conf: aggregate.AggregationConfig):
+    return conf
 
 
 def make_line_directory(out_dir, line: Line) -> str:
@@ -255,14 +266,6 @@ def get_hand_category_functions() -> List[Tuple[str, List[Tuple[str, Callable]]]
         return create_compute_action_freqs_closure(predicate, is_bet, wt)
 
     is_bet = lambda a: a.startswith("b")
-    # is_high_card = lambda h: h.is_high_card()
-    # is_2pair = lambda h: h.is_two_pair()
-    # is_trips = lambda h: h.is_trips()
-    # is_straight = lambda h: h.is_straight()
-    # is_flush = lambda h: h.is_flush()
-    # is_full_house = lambda h: h.is_full_house()
-    # is_quads = lambda h: h.is_quads()
-    # is_straight_flush = lambda h: h.is_straight_flush()
     wt = "MATCHUPS"
 
     basic_categories = [
