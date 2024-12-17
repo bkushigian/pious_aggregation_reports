@@ -1,6 +1,6 @@
 **/__pycache__
 .venv
-out*/
+outputs/*
 
 # For flamegraphs/profiling
 *.svg
