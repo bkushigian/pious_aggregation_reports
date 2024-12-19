@@ -3,21 +3,28 @@ from os import path as osp
 import os
 import shutil
 import sys
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 import tabulate
-from pious.pio import aggregate, Line, Node
+from pious.pio import Line, Node
+from pious.pio.aggregate import LinesToAggregate, AggregationConfig, SpotData
+from aggregate import aggregate_files_in_dir, aggregate_single_file
 from pious.hands import Hand
 from pious.hand_categories import HandCategorizer
 import textwrap
 import numpy as np
 import pandas as pd
+import time
 
 banner = f"""
 Create an aggregation report
 """
 
 
+CACHING = True
+
+
 def main():
+    global CACHING
     parser = ArgumentParser("aggregate")
 
     parser.add_argument(
@@ -34,13 +41,22 @@ def main():
         "--overwrite", action="store_true", help="Overwrite results of a computation"
     )
     parser.add_argument("--progress", action="store_true", help="Print progress bar")
+    parser.add_argument("--n_cores", type=int, default=1, help="Number of cores to use")
+    parser.add_argument(
+        "--time", action="store_true", help="Time the run of this program"
+    )
+    parser.add_argument(
+        "--no_caching", action="store_true", help="Helper argument for testing"
+    )
     args = parser.parse_args()
+    if args.no_caching:
+        CACHING = False
 
     if not osp.exists(args.cfr_file_or_sim_dir):
         print(f"No such file or directory {args.cfr_file_or_sim_dir}")
         exit(-1)
 
-    lines = aggregate.LinesToAggregate(
+    lines = LinesToAggregate(
         lines=args.lines,
         flop=args.flop,
         turn=args.turn,
@@ -69,31 +85,36 @@ def main():
             print()
             sys.exit(1)
 
-    conf = aggregate.AggregationConfig()
+    conf = AggregationConfig()
+    t0 = None
+    t1 = None
+    if args.time:
+        t0 = time.time()
     if osp.isdir(args.cfr_file_or_sim_dir):
-        reports = aggregate.aggregate_files_in_dir(
+        reports = aggregate_files_in_dir(
             args.cfr_file_or_sim_dir,
             lines,
             conf=conf,
             conf_callback=conf_callback,
             print_progress=args.progress,
-            n_threads=20,
+            n_threads=args.n_cores,
         )
         print(reports.keys())
     elif osp.isfile(args.cfr_file_or_sim_dir):
-        reports = aggregate.aggregate_single_file(
+        reports = aggregate_single_file(
             args.cfr_file_or_sim_dir,
             lines,
             conf=conf,
             conf_callback=conf_callback,
             print_progress=args.progress,
-            n_threads=20,
+            n_threads=args.n_cores,
         )
-        pass
     else:
         print(f"{args.cfr_file_or_sim_dir} is neither a .cfr file or a directory")
         exit(-1)
 
+    if args.time:
+        t1 = time.time()
     if args.print:
         for line in reports:
             print()
@@ -101,6 +122,8 @@ def main():
             df = reports[line]
             print(tabulate.tabulate(df, headers=df.keys()))
             print()
+    if args.time:
+        print(f"Ran in {t1 - t0: 6.1f} seconds")
     if args.out is not None and reports is not None:
         out_dir = osp.abspath(args.out)
         if osp.exists(out_dir):
@@ -121,7 +144,7 @@ def main():
                 sr.to_csv(csv_file_name, float_format="%.2f", index=False, na_rep="NaN")
 
 
-def conf_callback(node: Node, actions: List[str], conf: aggregate.AggregationConfig):
+def conf_callback(node: Node, actions: List[str], conf: AggregationConfig):
 
     new_conf = conf.copy()
     extra_columns = compute_extra_columns(node, actions)
@@ -194,14 +217,38 @@ def get_sub_reports(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
 
 
 def action_freqs_closure(
-    hand_query: str,
+    hand_query: Optional[str] = None,
     action_predicate: Callable = lambda a: a.startswith("b"),
     weight_type="MATCHUPS",
+    cached_query=None,
 ):
     weight_type = weight_type.upper()
 
-    def f(spot: aggregate.SpotData):
-        df = spot.hands_df().query(hand_query)
+    if not CACHING:
+        queries = []
+        if hand_query is not None:
+            queries.append(hand_query)
+        if cached_query is not None:
+            queries.append(cached_query)
+        hand_query = " and ".join([f"({q})" for q in queries])
+        cached_query = None
+
+    def f(spot: SpotData):
+        df = None  # Always initialized in then/else branches
+
+        if cached_query is not None:
+            df = spot._cache.get(cached_query, None)
+            if df is None:
+                # print(f"\033[31;1mCACHE_MISS\033[0m: {cached_query}")
+                df = spot.hands_df().query(cached_query)
+                spot._cache[cached_query] = df
+            else:
+                pass
+                # print(f"\033[32;1mCACHE_HIT\033[0m: {cached_query}")
+        else:
+            df = spot.hands_df()
+        if hand_query is not None:
+            df = df.query(hand_query)
         actions = [a for a in spot.available_actions() if action_predicate(a)]
         action_freq_column_names = [a + "_freq" for a in actions]
         action_columns = df[action_freq_column_names].sum(axis=1)
@@ -224,46 +271,6 @@ def action_freqs_closure(
         return 100 * result / total_weights
 
     return f
-
-
-def is_overpair(h: Hand):
-    if not h.is_pair():
-        return False
-    (pair_type, board_cards_seen, _) = HandCategorizer.get_pair_category(h)
-    return pair_type == HandCategorizer.POCKET_PAIR and board_cards_seen == 0
-
-
-def is_underpair(h: Hand, strength):
-    if not h.is_pair():
-        return False
-    (pair_type, board_cards_seen, _) = HandCategorizer.get_pair_category(h)
-    return pair_type == HandCategorizer.POCKET_PAIR and board_cards_seen == strength
-
-
-def is_pair_with_qualities(h: Hand, pair_strength, kicker_value=None):
-    if not h.is_pair():
-        return False
-    (pair_type, board_cards_seen, kicker) = HandCategorizer.get_pair_category(h)
-    return (
-        pair_type == HandCategorizer.REGULAR_PAIR
-        and board_cards_seen == pair_strength
-        and (kicker_value is None or kicker_value == kicker)
-    )
-
-
-def is_high_card_with_qualities(
-    h: Hand, p_top_card, p_bottom_card=None, kicker_value=None
-):
-    if not h.is_high_card():
-        return False
-    try:
-        (top, bottom) = HandCategorizer.get_high_card_category(h)
-    except Exception as e:
-        print(h)
-        raise e
-    return (p_top_card is None or p_top_card == top) and (
-        p_bottom_card is None or p_bottom_card == bottom
-    )
 
 
 def compute_extra_columns(node: Node, actions: List[str]):
@@ -303,11 +310,11 @@ def get_hand_category_functions(
     wt = "MATCHUPS"
 
     # Define some helper functions to collect frequencies
-    def bfreq(query_str):
-        return action_freqs_closure(query_str, is_b_action, wt)
+    def bfreq(cached_query=None, query_str=None):
+        return action_freqs_closure(query_str, is_b_action, wt, cached_query)
 
-    def cfreq(query_str):
-        return action_freqs_closure(query_str, is_c_action, wt)
+    def cfreq(cached_query=None, query_str=None):
+        return action_freqs_closure(query_str, is_c_action, wt, cached_query)
 
     hand_types = [
         "HighCard",
@@ -364,57 +371,47 @@ def get_hand_category_functions(
             hcs.append((f"[{i}]:{c_str}", cfreq(ht_str)))
     # Compute Draws
     ht_str = "hand_type == 0"
-    hcs.append((f"FlushDraw:{b_str}", bfreq(f"{ht_str} and {is_fd_str}")))
+    hcs.append((f"FlushDraw:{b_str}", bfreq(ht_str, is_fd_str)))
     if measure_c:
-        hcs.append((f"FlushDraw:{c_str}", cfreq(f"{ht_str} and {is_fd_str}")))
-    hcs.append((f"StraightDraw:{b_str}", bfreq(f"{ht_str} and {is_sd_str}")))
+        hcs.append((f"FlushDraw:{c_str}", cfreq(ht_str, is_fd_str)))
+    hcs.append((f"StraightDraw:{b_str}", bfreq(ht_str, is_sd_str)))
     if measure_c:
-        hcs.append((f"StraightDraw:{c_str}", cfreq(f"{ht_str} and {is_sd_str}")))
+        hcs.append((f"StraightDraw:{c_str}", cfreq(ht_str, is_sd_str)))
     if measure_backdoors:
         # Back door flush draws
-        hcs.append((f"BDFD:{b_str}", bfreq(f"{ht_str} and {is_bdfd_str}")))
+        hcs.append((f"BDFD:{b_str}", bfreq(ht_str, is_bdfd_str)))
         if measure_c:
-            hcs.append((f"BDFD:{c_str}", cfreq(f"{ht_str} and {is_bdfd_str}")))
+            hcs.append((f"BDFD:{c_str}", cfreq(ht_str, is_bdfd_str)))
         # Back door straight draws
-        hcs.append((f"BDSD:{b_str}", bfreq(f"{ht_str} and {is_bdsd_str}")))
+        hcs.append((f"BDSD:{b_str}", bfreq(ht_str, is_bdsd_str)))
         if measure_c:
-            hcs.append((f"BDSD:{c_str}", cfreq(f"{ht_str} and {is_bdsd_str}")))
+            hcs.append((f"BDSD:{c_str}", cfreq(ht_str, is_bdsd_str)))
     # Overs and Unders
     over_1_ht = "high_card_1_type == 0"
     over_2_ht = "high_card_2_type == 0"
     under_2_ht = f"high_card_2_type >= {num_ranks}"
-    hcs.append((f"TwoOvers:{b_str}", bfreq(f"{over_2_ht}")))
+    hcs.append((f"TwoOvers:{b_str}", bfreq(over_2_ht)))
     if measure_c:
-        hcs.append((f"TwoOvers:{c_str}", cfreq(f"{over_2_ht}")))
+        hcs.append((f"TwoOvers:{c_str}", cfreq(over_2_ht)))
     if measure_backdoors:
-        hcs.append((f"TwoOvers+BDFD:{b_str}", bfreq(f"{over_2_ht} and {is_bdfd_str}")))
+        hcs.append((f"TwoOvers+BDFD:{b_str}", bfreq(over_2_ht, is_bdfd_str)))
         if measure_c:
-            hcs.append(
-                (f"TwoOvers+BDFD:{c_str}", cfreq(f"{over_2_ht} and {is_bdfd_str}"))
-            )
-        hcs.append((f"TwoOvers+BDSD:{b_str}", bfreq(f"{over_2_ht} and {is_bdsd_str}")))
+            hcs.append((f"TwoOvers+BDFD:{c_str}", cfreq(over_2_ht, is_bdfd_str)))
+        hcs.append((f"TwoOvers+BDSD:{b_str}", bfreq(over_2_ht, is_bdsd_str)))
         if measure_c:
-            hcs.append(
-                (f"TwoOvers+BDSD:{c_str}", cfreq(f"{over_2_ht} and {is_bdsd_str}"))
-            )
+            hcs.append((f"TwoOvers+BDSD:{c_str}", cfreq(over_2_ht, is_bdsd_str)))
     # Overs and Unders
     over_under = f"{over_1_ht} and {under_2_ht}"
     hcs.append((f"OverUnder:{b_str}", bfreq(over_under)))
     if measure_c:
         hcs.append((f"OverUnder:{c_str}", cfreq(over_under)))
     if measure_backdoors:
-        hcs.append(
-            (f"OverUnder+BDFD:{b_str}", bfreq(f"{over_under} and {is_bdfd_str}"))
-        )
+        hcs.append((f"OverUnder+BDFD:{b_str}", bfreq(over_under, is_bdfd_str)))
         if measure_c:
-            hcs.append(
-                (f"TwoOvers+BDFD:{c_str}", cfreq(f"{over_under} and {is_bdfd_str}"))
-            )
-        hcs.append((f"TwoOvers+BDSD:{b_str}", bfreq(f"{over_under} and {is_bdsd_str}")))
+            hcs.append((f"TwoOvers+BDFD:{c_str}", cfreq(over_under, is_bdfd_str)))
+        hcs.append((f"TwoOvers+BDSD:{b_str}", bfreq(over_under, is_bdsd_str)))
         if measure_c:
-            hcs.append(
-                (f"TwoOvers+BDSD:{c_str}", cfreq(f"{over_under} and {is_bdsd_str}"))
-            )
+            hcs.append((f"TwoOvers+BDSD:{c_str}", cfreq(over_under, is_bdsd_str)))
 
     #########################
     # Compute Pair Category #
