@@ -1,4 +1,4 @@
-from argparse import Namespace, ArgumentParser
+from argparse import ArgumentParser
 from os import path as osp
 import os
 import shutil
@@ -69,13 +69,7 @@ def main():
             print()
             sys.exit(1)
 
-    hand_categories = get_hand_category_functions()
-    flat_categories = []
-    for super_cat_name, sub_cats in hand_categories:
-        for sub_cat_name, sub_cat in sub_cats:
-            flat_categories.append((f"{super_cat_name}:{sub_cat_name}", sub_cat))
-
-    conf = aggregate.AggregationConfig(extra_columns=flat_categories)
+    conf = aggregate.AggregationConfig()
     if osp.isdir(args.cfr_file_or_sim_dir):
         reports = aggregate.aggregate_files_in_dir(
             args.cfr_file_or_sim_dir,
@@ -83,6 +77,7 @@ def main():
             conf=conf,
             conf_callback=conf_callback,
             print_progress=args.progress,
+            n_threads=20,
         )
         print(reports.keys())
     elif osp.isfile(args.cfr_file_or_sim_dir):
@@ -92,6 +87,7 @@ def main():
             conf=conf,
             conf_callback=conf_callback,
             print_progress=args.progress,
+            n_threads=20,
         )
         pass
     else:
@@ -125,8 +121,17 @@ def main():
                 sr.to_csv(csv_file_name, float_format="%.2f", index=False, na_rep="NaN")
 
 
-def conf_callback(node: Node, conf: aggregate.AggregationConfig):
-    return conf
+def conf_callback(node: Node, actions: List[str], conf: aggregate.AggregationConfig):
+
+    new_conf = conf.copy()
+    extra_columns = compute_extra_columns(node, actions)
+
+    flat_categories = []
+    for super_cat_name, sub_cats in extra_columns:
+        for sub_cat_name, sub_cat in sub_cats:
+            flat_categories.append((f"{super_cat_name}:{sub_cat_name}", sub_cat))
+    new_conf.extra_columns = flat_categories
+    return new_conf
 
 
 def make_line_directory(out_dir, line: Line) -> str:
@@ -188,7 +193,7 @@ def get_sub_reports(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
     return result
 
 
-def create_compute_action_freqs_closure(
+def action_freqs_closure(
     hand_query: str,
     action_predicate: Callable = lambda a: a.startswith("b"),
     weight_type="MATCHUPS",
@@ -261,106 +266,289 @@ def is_high_card_with_qualities(
     )
 
 
-def get_hand_category_functions() -> List[Tuple[str, List[Tuple[str, Callable]]]]:
-    def cc(predicate):
-        return create_compute_action_freqs_closure(predicate, is_bet, wt)
+def compute_extra_columns(node: Node, actions: List[str]):
+    board = node.board
+    measure_bdfd = False
+    if len(board) == 3:
+        measure_bdfd = True
+    return get_hand_category_functions(
+        board,
+        actions=actions,
+        measure_c="f" in actions,
+        measure_backdoors=measure_bdfd,
+    )
 
-    is_bet = lambda a: a.startswith("b")
+
+def get_hand_category_functions(
+    board,
+    actions,
+    measure_c=False,
+    measure_backdoors=False,
+) -> List[Tuple[str, List[Tuple[str, Callable]]]]:
+    ranks = [c[0] for c in board]
+    num_ranks = len(set(ranks))
+    # Helper functions to determine what type of action we are looking at
+    is_b_action = lambda a: a.startswith("b")
+    is_c_action = lambda a: a == "c"
+
+    # Give proper human-readable names to `b` and `c` actions
+    b_str = "BetFreq"
+    if "f" in actions:
+        b_str = "RaiseFreq"
+
+    c_str = "CheckFreq"
+    if "f" in actions:
+        c_str = "CallFreq"
+
     wt = "MATCHUPS"
 
-    basic_categories = [
-        ("HighCard", cc("hand_type == 0")),
-        ("Pair", cc("hand_type == 1")),
-        ("TwoPair", cc("hand_type == 2")),
-        ("Trips", cc("hand_type == 3")),
-        ("Straight", cc("hand_type == 4")),
-        ("Flush", cc("hand_type == 5")),
-        ("FullHouse", cc("hand_type == 6")),
-        ("Quads", cc("hand_type == 7")),
-        ("StraightFlush", cc("hand_type == 8")),
+    # Define some helper functions to collect frequencies
+    def bfreq(query_str):
+        return action_freqs_closure(query_str, is_b_action, wt)
+
+    def cfreq(query_str):
+        return action_freqs_closure(query_str, is_c_action, wt)
+
+    hand_types = [
+        "HighCard",
+        "Pair",
+        "TwoPair",
+        "Trips",
+        "Straight",
+        "Flush",
+        "FullHouse",
+        "Quads",
+        "StraightFlush",
     ]
 
-    pair_subcategories = [
-        ("OverPair", cc("pair_type == 0 and pair_cards_seen == 0")),
-        ("TopPair", cc("pair_type == 2 and pair_cards_seen == 1")),
-        ("UnderPair(1)", cc("pair_type == 0 and pair_cards_seen == 1")),
-        ("2ndPair", cc("pair_type == 2 and pair_cards_seen == 2")),
-        ("UnderPair(2)", cc("pair_type == 0 and pair_cards_seen == 2")),
-        ("3rdPair", cc("pair_type == 2 and pair_cards_seen == 3")),
-        ("UnderPair(3)", cc("pair_type == 0 and pair_cards_seen == 3")),
-        ("4thPair", cc("pair_type == 2 and pair_cards_seen == 4")),
-        ("UnderPair(4)", cc("pair_type == 0 and pair_cards_seen == 4")),
-        ("5thPair", cc("pair_type == 2 and pair_cards_seen == 5")),
-        ("UnderPair(5)", cc("pair_type == 0 and pair_cards_seen == 5")),
-    ]
+    is_bdfd_str = "flush_type == '3_FLUSH'"
+    is_bdsd_str = "straight_type == '3_STRAIGHT'"
+    is_fd_str = "flush_type == 'FLUSH_DRAW'"
+    is_sd_str = "straight_type == 'STRAIGHT_DRAW'"
 
-    top_pair_subcategories = [
-        ("[1]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 1")),
-        ("[2]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 2")),
-        ("[3]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 3")),
-        ("[4]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 4")),
-        ("[5]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 5")),
-        ("[6]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 6")),
-        ("[7]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 7")),
-        ("[8]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 8")),
-        ("[9]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 9")),
-        ("[10]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 10")),
-        ("[11]", cc("pair_type == 2 and pair_cards_seen == 1 and pair_kicker == 11")),
-    ]
+    #############################
+    # Compute Overview Category #
+    #############################
 
-    second_pair_subcategories = [
-        ("[1]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 1")),
-        ("[2]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 2")),
-        ("[3]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 3")),
-        ("[4]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 4")),
-        ("[5]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 5")),
-        ("[6]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 6")),
-        ("[7]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 7")),
-        ("[8]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 8")),
-        ("[9]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 9")),
-        ("[10]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 10")),
-        ("[11]", cc("pair_type == 2 and pair_cards_seen == 2 and pair_kicker == 11")),
-    ]
+    overview_categories = []
+    ovs = overview_categories
 
-    third_pair_subcategories = [
-        ("[1]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 1")),
-        ("[2]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 2")),
-        ("[3]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 3")),
-        ("[4]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 4")),
-        ("[5]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 5")),
-        ("[6]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 6")),
-        ("[7]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 7")),
-        ("[8]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 8")),
-        ("[9]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 9")),
-        ("[10]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 10")),
-        ("[11]", cc("pair_type == 2 and pair_cards_seen == 3 and pair_kicker == 11")),
-    ]
+    # Compute Primary Hands
+    for i, ht in enumerate(hand_types):
+        ht_str = f"hand_type == {i}"
+        ovs.append((f"{ht}:{b_str}", bfreq(ht_str)))
+        if measure_c:
+            ovs.append((f"{ht}:{c_str}", cfreq(ht_str)))
+    # Compute Draws
+    ovs.append((f"FlushDraw:{b_str}", bfreq(is_fd_str)))
+    if measure_c:
+        ovs.append((f"FlushDraw:{c_str}", cfreq(is_fd_str)))
+    ovs.append((f"StraightDraw:{b_str}", bfreq(is_sd_str)))
+    if measure_c:
+        ovs.append((f"StraightDraw:{c_str}", cfreq(is_sd_str)))
+    if measure_backdoors:
+        ovs.append((f"BDFD:{b_str}", bfreq(is_bdfd_str)))
+        if measure_c:
+            ovs.append((f"BDFD:{c_str}", cfreq(is_bdfd_str)))
 
-    fourth_pair_subcategories = [
-        ("[1]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 1")),
-        ("[2]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 2")),
-        ("[3]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 3")),
-        ("[4]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 4")),
-        ("[5]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 5")),
-        ("[6]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 6")),
-        ("[7]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 7")),
-        ("[8]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 8")),
-        ("[9]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 9")),
-        ("[10]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 10")),
-        ("[11]", cc("pair_type == 2 and pair_cards_seen == 4 and pair_kicker == 11")),
-    ]
+    ##############################
+    # Compute High Card Category #
+    ##############################
 
-    high_card_subcategories = [
-        ("[0]", cc("high_card_1_type == 0")),
-        ("[1]", cc("high_card_1_type == 1")),
-        ("[2]", cc("high_card_1_type == 2")),
-        ("[3]", cc("high_card_1_type == 3")),
-        ("[4]", cc("high_card_1_type == 4")),
-        ("FlushDraw", cc("hand_type == 0 and flush_type == 'FLUSH_DRAW'")),
+    high_card_subcategories = []
+    hcs = high_card_subcategories
+    for i in range(5):
+        ht_str = f"high_card_1_type == {i}"
+        hcs.append((f"[{i}]:{b_str}", bfreq(ht_str)))
+        if measure_c:
+            hcs.append((f"[{i}]:{c_str}", cfreq(ht_str)))
+    # Compute Draws
+    ht_str = "hand_type == 0"
+    hcs.append((f"FlushDraw:{b_str}", bfreq(f"{ht_str} and {is_fd_str}")))
+    if measure_c:
+        hcs.append((f"FlushDraw:{c_str}", cfreq(f"{ht_str} and {is_fd_str}")))
+    hcs.append((f"StraightDraw:{b_str}", bfreq(f"{ht_str} and {is_sd_str}")))
+    if measure_c:
+        hcs.append((f"StraightDraw:{c_str}", cfreq(f"{ht_str} and {is_sd_str}")))
+    if measure_backdoors:
+        # Back door flush draws
+        hcs.append((f"BDFD:{b_str}", bfreq(f"{ht_str} and {is_bdfd_str}")))
+        if measure_c:
+            hcs.append((f"BDFD:{c_str}", cfreq(f"{ht_str} and {is_bdfd_str}")))
+        # Back door straight draws
+        hcs.append((f"BDSD:{b_str}", bfreq(f"{ht_str} and {is_bdsd_str}")))
+        if measure_c:
+            hcs.append((f"BDSD:{c_str}", cfreq(f"{ht_str} and {is_bdsd_str}")))
+    # Overs and Unders
+    over_1_ht = "high_card_1_type == 0"
+    over_2_ht = "high_card_2_type == 0"
+    under_2_ht = f"high_card_2_type >= {num_ranks}"
+    hcs.append((f"TwoOvers:{b_str}", bfreq(f"{over_2_ht}")))
+    if measure_c:
+        hcs.append((f"TwoOvers:{c_str}", cfreq(f"{over_2_ht}")))
+    if measure_backdoors:
+        hcs.append((f"TwoOvers+BDFD:{b_str}", bfreq(f"{over_2_ht} and {is_bdfd_str}")))
+        if measure_c:
+            hcs.append(
+                (f"TwoOvers+BDFD:{c_str}", cfreq(f"{over_2_ht} and {is_bdfd_str}"))
+            )
+        hcs.append((f"TwoOvers+BDSD:{b_str}", bfreq(f"{over_2_ht} and {is_bdsd_str}")))
+        if measure_c:
+            hcs.append(
+                (f"TwoOvers+BDSD:{c_str}", cfreq(f"{over_2_ht} and {is_bdsd_str}"))
+            )
+    # Overs and Unders
+    over_under = f"{over_1_ht} and {under_2_ht}"
+    hcs.append((f"OverUnder:{b_str}", bfreq(over_under)))
+    if measure_c:
+        hcs.append((f"OverUnder:{c_str}", cfreq(over_under)))
+    if measure_backdoors:
+        hcs.append(
+            (f"OverUnder+BDFD:{b_str}", bfreq(f"{over_under} and {is_bdfd_str}"))
+        )
+        if measure_c:
+            hcs.append(
+                (f"TwoOvers+BDFD:{c_str}", cfreq(f"{over_under} and {is_bdfd_str}"))
+            )
+        hcs.append((f"TwoOvers+BDSD:{b_str}", bfreq(f"{over_under} and {is_bdsd_str}")))
+        if measure_c:
+            hcs.append(
+                (f"TwoOvers+BDSD:{c_str}", cfreq(f"{over_under} and {is_bdsd_str}"))
+            )
+
+    #########################
+    # Compute Pair Category #
+    #########################
+
+    pair_subcategories = []
+    names_and_queries = [
+        ("OverPair", "pair_type == 0 and pair_cards_seen == 0"),
+        ("TopPair", "pair_type == 2 and pair_cards_seen == 1"),
+        ("UnderPair(1)", "pair_type == 0 and pair_cards_seen == 1"),
+        ("2ndPair", "pair_type == 2 and pair_cards_seen == 2"),
+        ("UnderPair(2)", "pair_type == 0 and pair_cards_seen == 2"),
+        ("3rdPair", "pair_type == 2 and pair_cards_seen == 3"),
+        ("UnderPair(3)", "pair_type == 0 and pair_cards_seen == 3"),
+        ("4thPair", "pair_type == 2 and pair_cards_seen == 4"),
+        ("UnderPair(4)", "pair_type == 0 and pair_cards_seen == 4"),
+        ("5thPair", "pair_type == 2 and pair_cards_seen == 5"),
+        ("UnderPair(5)", "pair_type == 0 and pair_cards_seen == 5"),
     ]
+    for name, query_str in names_and_queries:
+        pair_subcategories.append((f"{name}:{b_str}", bfreq(query_str)))
+        if measure_c:
+            pair_subcategories.append((f"{name}:{c_str}", cfreq(query_str)))
+
+    #############################
+    # Compute Top Pair Category #
+    #############################
+
+    top_pair_subcategories = []
+    scs = top_pair_subcategories
+    ht_str = "pair_type == 2 and pair_cards_seen == 1"
+    for i in range(1, 12):
+        kicker_str = f"pair_kicker == {i}"
+        scs.append((f"[{i}]:{b_str}", bfreq(f"{ht_str} and {kicker_str}")))
+        if measure_c:
+            scs.append((f"[{i}]:{c_str}", cfreq(f"{ht_str} and {kicker_str}")))
+    # Measure Top Pair Draws
+    ## Flush Draws
+    scs.append((f"FlushDraw:{b_str}", bfreq(f"{ht_str} and {is_fd_str}")))
+    if measure_c:
+        scs.append((f"FlushDraw:{c_str}", cfreq(f"{ht_str} and {is_fd_str}")))
+    ## Straight Draws
+    scs.append((f"StraightDraw:{b_str}", bfreq(f"{ht_str} and {is_sd_str}")))
+    if measure_c:
+        scs.append((f"StraightDraw:{c_str}", cfreq(f"{ht_str} and {is_sd_str}")))
+    ## BDFDs
+    if measure_backdoors:
+        scs.append((f"BDFD:{b_str}", bfreq(f"{ht_str} and {is_bdfd_str}")))
+        if measure_c:
+            scs.append((f"BDFD:{c_str}", cfreq(f"{ht_str} and {is_bdfd_str}")))
+
+    #############################
+    # Compute 2nd Pair Category #
+    #############################
+
+    second_pair_subcategories = []
+    scs = second_pair_subcategories
+    ht_str = "pair_type == 2 and pair_cards_seen == 2"
+    for i in range(1, 12):
+        kicker_str = f"pair_kicker == {i}"
+        scs.append((f"[{i}]:{b_str}", bfreq(f"{ht_str} and {kicker_str}")))
+        if measure_c:
+            scs.append((f"[{i}]:{c_str}", cfreq(f"{ht_str} and {kicker_str}")))
+    # Measure Top Pair Draws
+    ## Flush Draws
+    scs.append((f"FlushDraw:{b_str}", bfreq(f"{ht_str} and {is_fd_str}")))
+    if measure_c:
+        scs.append((f"FlushDraw:{c_str}", cfreq(f"{ht_str} and {is_fd_str}")))
+    ## Straight Draws
+    scs.append((f"StraightDraw:{b_str}", bfreq(f"{ht_str} and {is_sd_str}")))
+    if measure_c:
+        scs.append((f"StraightDraw:{c_str}", cfreq(f"{ht_str} and {is_sd_str}")))
+    ## BDFDs
+    if measure_backdoors:
+        scs.append((f"BDFD:{b_str}", bfreq(f"{ht_str} and {is_bdfd_str}")))
+        if measure_c:
+            scs.append((f"BDFD:{c_str}", cfreq(f"{ht_str} and {is_bdfd_str}")))
+
+    #############################
+    # Compute 3rd Pair Category #
+    #############################
+
+    third_pair_subcategories = []
+    scs = third_pair_subcategories
+    ht_str = "pair_type == 2 and pair_cards_seen == 3"
+    for i in range(1, 12):
+        kicker_str = f"pair_kicker == {i}"
+        scs.append((f"[{i}]:{b_str}", bfreq(f"{ht_str} and {kicker_str}")))
+        if measure_c:
+            scs.append((f"[{i}]:{c_str}", cfreq(f"{ht_str} and {kicker_str}")))
+    # Measure Top Pair Draws
+    ## Flush Draws
+    scs.append((f"FlushDraw:{b_str}", bfreq(f"{ht_str} and {is_fd_str}")))
+    if measure_c:
+        scs.append((f"FlushDraw:{c_str}", cfreq(f"{ht_str} and {is_fd_str}")))
+    ## Straight Draws
+    scs.append((f"StraightDraw:{b_str}", bfreq(f"{ht_str} and {is_sd_str}")))
+    if measure_c:
+        scs.append((f"StraightDraw:{c_str}", cfreq(f"{ht_str} and {is_sd_str}")))
+    ## BDFDs
+    if measure_backdoors:
+        scs.append((f"BDFD:{b_str}", bfreq(f"{ht_str} and {is_bdfd_str}")))
+        if measure_c:
+            scs.append((f"BDFD:{c_str}", cfreq(f"{ht_str} and {is_bdfd_str}")))
+
+    #############################
+    # Compute 4rd Pair Category #
+    #############################
+
+    fourth_pair_subcategories = []
+    scs = fourth_pair_subcategories
+    ht_str = "pair_type == 2 and pair_cards_seen == 4"
+    for i in range(1, 12):
+        kicker_str = f"pair_kicker == {i}"
+        scs.append((f"[{i}]:{b_str}", bfreq(f"{ht_str} and {kicker_str}")))
+        if measure_c:
+            scs.append((f"[{i}]:{c_str}", cfreq(f"{ht_str} and {kicker_str}")))
+    # Measure Top Pair Draws
+    ## Flush Draws
+    scs.append((f"FlushDraw:{b_str}", bfreq(f"{ht_str} and {is_fd_str}")))
+    if measure_c:
+        scs.append((f"FlushDraw:{c_str}", cfreq(f"{ht_str} and {is_fd_str}")))
+    ## Straight Draws
+    scs.append((f"StraightDraw:{b_str}", bfreq(f"{ht_str} and {is_sd_str}")))
+    if measure_c:
+        scs.append((f"StraightDraw:{c_str}", cfreq(f"{ht_str} and {is_sd_str}")))
+    ## BDFDs
+    if measure_backdoors:
+        scs.append((f"BDFD:{b_str}", bfreq(f"{ht_str} and {is_bdfd_str}")))
+        if measure_c:
+            scs.append((f"BDFD:{c_str}", cfreq(f"{ht_str} and {is_bdfd_str}")))
 
     return [
-        ("Overview", basic_categories),
+        ("Overview", overview_categories),
         ("Pairs", pair_subcategories),
         ("TopPair", top_pair_subcategories),
         ("2ndPair", second_pair_subcategories),
