@@ -1,8 +1,12 @@
 **/__pycache__
 .venv
 outputs/*
+secrets/*
 
 # For flamegraphs/profiling
 *.svg
 *.png
 *.prof
+
+*.xlsx
+*.xlsx#

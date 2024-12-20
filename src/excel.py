@@ -217,12 +217,36 @@ def main():
     wb = Workbook()
     ws = None
     one_decimal_style = NamedStyle(name="one_decimal_style", number_format="0.0")
-    for file in files:
-        if not file.endswith(".csv"):
+    file_order = [
+        "Aggregation",
+        "Overview",
+        "Nothing",
+        "Pairs",
+        "OverPair",
+        "TopPair",
+        "UnderPair(1)",
+        "2ndPair",
+        "UnderPair(2)",
+        "3rdPair",
+        "UnderPair(3)",
+        "4thPair",
+        "UnderPair(4)",
+        "5thPair",
+        "UnderPair(5)",
+    ]
+    unvisited = {f for f in files if f.endswith(".csv")}
+    for file_base in file_order:
+        file = file_base + ".csv"
+        if file not in unvisited:
             continue
+        unvisited.remove(file)
+
         rel_path = osp.join(dir, file)
         path = osp.abspath(rel_path)
-        df = pd.read_csv(path)
+        try:
+            df = pd.read_csv(path)
+        except pd.errors.EmptyDataError:
+            continue
         title = file[:-4]
         if ws is None:
             ws = wb.active
@@ -240,6 +264,8 @@ def main():
         format_card_columns(ws)
         format_cells_as_bars(ws, col_types, max_depth)
 
+    if len(unvisited) > 0:
+        print(f"Warning: unprocessed CSVs: {unvisited}")
     out = args.out
     if not out.endswith(".xlsx"):
         out = f"{out}.xlsx"
