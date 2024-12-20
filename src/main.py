@@ -299,13 +299,13 @@ def get_hand_category_functions(
     is_c_action = lambda a: a == "c"
 
     # Give proper human-readable names to `b` and `c` actions
-    b_str = "BetFreq"
+    b_str = "Bet"
     if "f" in actions:
-        b_str = "RaiseFreq"
+        b_str = "Raise"
 
-    c_str = "CheckFreq"
+    c_str = "Check"
     if "f" in actions:
-        c_str = "CallFreq"
+        c_str = "Call"
 
     wt = "MATCHUPS"
 
@@ -390,28 +390,30 @@ def get_hand_category_functions(
     over_1_ht = "high_card_1_type == 0"
     over_2_ht = "high_card_2_type == 0"
     under_2_ht = f"high_card_2_type >= {num_ranks}"
-    hcs.append((f"TwoOvers:{b_str}", bfreq(over_2_ht)))
+    # Over Cards
+    hcs.append((f"TwoOvers:Total:{b_str}", bfreq(over_2_ht)))
     if measure_c:
-        hcs.append((f"TwoOvers:{c_str}", cfreq(over_2_ht)))
+        hcs.append((f"TwoOvers:Total:{c_str}", cfreq(over_2_ht)))
+
     if measure_backdoors:
-        hcs.append((f"TwoOvers+BDFD:{b_str}", bfreq(over_2_ht, is_bdfd_str)))
+        hcs.append((f"TwoOvers:BDFD:{b_str}", bfreq(over_2_ht, is_bdfd_str)))
         if measure_c:
-            hcs.append((f"TwoOvers+BDFD:{c_str}", cfreq(over_2_ht, is_bdfd_str)))
-        hcs.append((f"TwoOvers+BDSD:{b_str}", bfreq(over_2_ht, is_bdsd_str)))
+            hcs.append((f"TwoOvers:BDFD:{c_str}", cfreq(over_2_ht, is_bdfd_str)))
+        hcs.append((f"TwoOvers:BDSD:{b_str}", bfreq(over_2_ht, is_bdsd_str)))
         if measure_c:
-            hcs.append((f"TwoOvers+BDSD:{c_str}", cfreq(over_2_ht, is_bdsd_str)))
+            hcs.append((f"TwoOvers:BDSD:{c_str}", cfreq(over_2_ht, is_bdsd_str)))
     # Overs and Unders
     over_under = f"{over_1_ht} and {under_2_ht}"
     hcs.append((f"OverUnder:{b_str}", bfreq(over_under)))
     if measure_c:
         hcs.append((f"OverUnder:{c_str}", cfreq(over_under)))
     if measure_backdoors:
-        hcs.append((f"OverUnder+BDFD:{b_str}", bfreq(over_under, is_bdfd_str)))
+        hcs.append((f"OverUnder:BDFD:{b_str}", bfreq(over_under, is_bdfd_str)))
         if measure_c:
-            hcs.append((f"TwoOvers+BDFD:{c_str}", cfreq(over_under, is_bdfd_str)))
-        hcs.append((f"TwoOvers+BDSD:{b_str}", bfreq(over_under, is_bdsd_str)))
+            hcs.append((f"OverUnder:BDFD:{c_str}", cfreq(over_under, is_bdfd_str)))
+        hcs.append((f"OverUnder:BDSD:{b_str}", bfreq(over_under, is_bdsd_str)))
         if measure_c:
-            hcs.append((f"TwoOvers+BDSD:{c_str}", cfreq(over_under, is_bdsd_str)))
+            hcs.append((f"OverUnder:BDSD:{c_str}", cfreq(over_under, is_bdsd_str)))
 
     #########################
     # Compute Pair Category #
