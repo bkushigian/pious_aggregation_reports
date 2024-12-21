@@ -7,7 +7,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import tabulate
 from pious.pio import Line, Node
 from pious.pio.aggregate import LinesToAggregate, AggregationConfig, SpotData
-from aggregate import aggregate_files_in_dir, aggregate_single_file
+from .aggregate import aggregate_files_in_dir, aggregate_single_file
 from pious.hands import Hand
 from pious.hand_categories import HandCategorizer
 import textwrap
