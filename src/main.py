@@ -341,7 +341,7 @@ def get_hand_category_functions(
         return action_freqs_closure(query_str, is_f_action, wt, cached_query)
 
     hand_types = [
-        "HighCard",
+        "Nothing",
         "Pair",
         "TwoPair",
         "Trips",
@@ -390,8 +390,27 @@ def get_hand_category_functions(
     nothing_cats = []
     nothing_cats += ht_freqs("Nothing", "hand_type == 0")
     ht_str = "hand_type == 0"
+    nothing_cats += ht_freqs("A-High:All", "hr1 == 14")
+    nothing_cats += ht_freqs("A-High:H", "hr1 == 14", "hr2 >= 10")
+    nothing_cats += ht_freqs("A-High:M", "hr1 == 14", "hr2 < 10 and hr2 >= 6")
+    nothing_cats += ht_freqs("A-High:L", "hr1 == 14", "hr2 <= 5")
+
+    nothing_cats += ht_freqs("K-High:All", "hr1 == 13")
+    nothing_cats += ht_freqs("K-High:H", "hr1 == 13", "hr2 >= 10")
+    nothing_cats += ht_freqs("K-High:M", "hr1 == 13", "hr2 < 10 and hr2 >= 6")
+    nothing_cats += ht_freqs("K-High:L", "hr1 == 13", "hr2 <= 5")
+
+    nothing_cats += ht_freqs("Q-High:All", "hr1 == 12")
+    nothing_cats += ht_freqs("Q-High:H", "hr1 == 12", "hr2 >= 10")
+    nothing_cats += ht_freqs("Q-High:M", "hr1 == 12", "hr2 < 10 and hr2 >= 6")
+    nothing_cats += ht_freqs("Q-High:L", "hr1 == 12", "hr2 <= 5")
+
+    nothing_cats += ht_freqs("J-High:All", "hr1 == 11")
+    nothing_cats += ht_freqs("T-High:All", "hr1 == 10")
     for kicker_idx in range(5):
-        nothing_cats += ht_freqs(f"[{kicker_idx}]", f"high_card_1_type == {kicker_idx}")
+        nothing_cats += ht_freqs(
+            f"BoardGroup:[{kicker_idx}]", f"high_card_1_type == {kicker_idx}"
+        )
     # Compute Draws
     nothing_cats += ht_freqs(f"Combo", ht_str, is_combo_str)
     nothing_cats += ht_freqs(f"FD", ht_str, is_fd_str)
@@ -443,6 +462,9 @@ def get_hand_category_functions(
 
         pair_subcats = []
         ht_str = f"{pair_type} and {pair_sub_query_str}"
+
+        # Collect overall frequencies
+        pair_subcats += ht_freqs(f"All", ht_str)
 
         # Collect per-kicker info
         if "underpair" in name.lower() or "overpair" in name.lower():

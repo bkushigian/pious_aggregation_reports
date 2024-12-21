@@ -10,6 +10,9 @@ from argparse import ArgumentParser
 import os
 from os import path as osp
 
+CARD_COLUMN_WIDTH = 3.75
+ACTION_COLUMN_WIDTH = 8
+
 
 def freeze_row(ws: Worksheet, row):
     if ws.freeze_panes is None:
@@ -36,6 +39,7 @@ def add_headers(df: pd.DataFrame, ws: Worksheet):
     col_idx = 1
 
     col_types = {"raise": [], "bet": [], "check": [], "fold": [], "call": [], "ev": []}
+    actions = {"raise", "bet", "check", "fold", "call"}
 
     for i, split in enumerate(split_columns, start=1):
         row_idx = 1
@@ -47,6 +51,10 @@ def add_headers(df: pd.DataFrame, ws: Worksheet):
                     raise RuntimeError("Illegal State")
                 found = True
                 col_types[sc].append(i)
+
+                if sc in actions:
+                    col_letter = get_column_letter(col_idx)
+                    ws.column_dimensions[col_letter].width = ACTION_COLUMN_WIDTH
             elif sc in ("oop ev", "ip_ev"):
                 if found:
                     raise RuntimeError("Illegal State")
@@ -63,13 +71,15 @@ def add_headers(df: pd.DataFrame, ws: Worksheet):
 def format_card_columns(ws: Worksheet) -> int:
     column_names = ("flop", "turn", "river")
     suit_symbols = {"h": "♥", "d": "♦", "s": "♠", "c": "♣"}
-    suit_colors = {"h": "FF0000", "d": "0000FF", "s": "000000", "c": "00FF00"}
+    suit_colors = {"h": "AA1200", "d": "0000FF", "s": "000000", "c": "00AA23"}
     max_card_col_index = 0
-    for col_idx in range(1, 4):
-        cell = ws.cell(row=1, column=col_idx)
+    for col_idx in range(1, 7):
+        cell = ws.cell(row=2, column=col_idx)
         if str(cell.value).lower() in column_names:
+            col_letter = get_column_letter(col_idx)
+            ws.column_dimensions[col_letter].width = CARD_COLUMN_WIDTH
             max_card_col_index += 1
-            row_idx = 2
+            row_idx = 4
             while row_idx <= ws.max_row:
                 cell = ws.cell(row=row_idx, column=col_idx)
                 v = cell.value
@@ -86,6 +96,7 @@ def format_card_columns(ws: Worksheet) -> int:
 
                     joined = " ".join(xs)
                     cell = ws.cell(row=row_idx, column=col_idx, value=joined)
+                    cell.font = Font(color=color)
                 row_idx += 1
 
     # Now, freeze these columns
@@ -164,6 +175,32 @@ def format_cells_as_bars(ws: Worksheet, col_types, header_height):
         ws.conditional_formatting.add(f"{top_left}:{bot_right}", fold_databar_rule)
 
 
+def process_card_columns(df: pd.DataFrame) -> pd.DataFrame:
+    flops = df["Flop"]
+    fc1 = []
+    fc2 = []
+    fc3 = []
+    new_columns = {"Board:Flop:1": fc1, "Board:Flop:2": fc2, "Board:Flop:3": fc3}
+    to_drop = ["Flop"]
+    for flop in flops:
+        c1 = flop[0:2]
+        c2 = flop[2:4]
+        c3 = flop[4:6]
+        fc1.append(c1)
+        fc2.append(c2)
+        fc3.append(c3)
+    if "Turn" in df:
+        turns = df["Turn"]
+        new_columns["Board:Turn"] = turns
+        to_drop.append("Turn")
+
+    if "River" in df:
+        rivers = df["River"]
+        new_columns["Board:River"] = rivers
+        to_drop.append("River")
+    return pd.concat([pd.DataFrame(data=new_columns), df.drop(columns=to_drop)], axis=1)
+
+
 def process_df(df: pd.DataFrame, ws: Worksheet) -> int:
 
     max_depth, col_types = add_headers(df, ws)
@@ -227,6 +264,7 @@ def main():
         else:
             ws = wb.create_sheet(title=title)
 
+        df = process_card_columns(df)
         max_depth, col_types = process_df(df, ws)
         for r_idx, row in enumerate(
             dataframe_to_rows(df, index=False, header=False), start=max_depth + 1
@@ -246,7 +284,7 @@ def main():
                 value = cell.value
                 v = value
                 right = col_idx
-                while right < n_columns and v == value and str(value) != "":
+                while right <= n_columns and v == value and str(value) != "":
                     right += 1
                     cell = ws.cell(row=row_idx, column=right)
                     v = cell.value
