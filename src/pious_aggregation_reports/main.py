@@ -8,12 +8,14 @@ import tabulate
 from pious.pio import Line, Node
 from pious.pio.aggregate import LinesToAggregate, AggregationConfig, SpotData
 from .aggregate import aggregate_files_in_dir, aggregate_single_file
-from pious.hands import Hand
 from pious.hand_categories import HandCategorizer
 import textwrap
 import numpy as np
 import pandas as pd
 import time
+from ansi.color import fg
+from .excel import make_workbook_from_dict
+import datetime
 
 banner = f"""
 Create an aggregation report
@@ -42,9 +44,6 @@ def main():
     )
     parser.add_argument("--progress", action="store_true", help="Print progress bar")
     parser.add_argument("--n_cores", type=int, default=1, help="Number of cores to use")
-    parser.add_argument(
-        "--time", action="store_true", help="Time the run of this program"
-    )
     parser.add_argument(
         "--no_caching", action="store_true", help="Helper argument for testing"
     )
@@ -88,8 +87,7 @@ def main():
     conf = AggregationConfig()
     t0 = None
     t1 = None
-    if args.time:
-        t0 = time.time()
+    t0 = time.time()
     if osp.isdir(args.cfr_file_or_sim_dir):
         reports = aggregate_files_in_dir(
             args.cfr_file_or_sim_dir,
@@ -99,7 +97,6 @@ def main():
             print_progress=args.progress,
             n_threads=args.n_cores,
         )
-        print(reports.keys())
     elif osp.isfile(args.cfr_file_or_sim_dir):
         reports = aggregate_single_file(
             args.cfr_file_or_sim_dir,
@@ -113,8 +110,7 @@ def main():
         print(f"{args.cfr_file_or_sim_dir} is neither a .cfr file or a directory")
         exit(-1)
 
-    if args.time:
-        t1 = time.time()
+    t1 = time.time()
     if args.print:
         for line in reports:
             print()
@@ -122,10 +118,12 @@ def main():
             df = reports[line]
             print(tabulate.tabulate(df, headers=df.keys()))
             print()
-    if args.time:
-        print(f"Ran in {t1 - t0: 6.1f} seconds")
-    if args.out is not None and reports is not None:
-        out_dir = osp.abspath(args.out)
+    print(f"Ran in {t1 - t0: 6.1f} seconds")
+    out = args.out
+    if out is None:
+        out = get_out_dir()
+    if out is not None and reports is not None:
+        out_dir = osp.abspath(out)
         if osp.exists(out_dir):
             if args.overwrite:
                 shutil.rmtree(out_dir)
@@ -134,6 +132,7 @@ def main():
 
         print("Creating dir", out_dir)
         os.makedirs(out_dir)
+        workbooks = []
         for line in reports:
             df = reports[line]
             line_dir = make_line_directory(out_dir, line)
@@ -142,6 +141,20 @@ def main():
                 sr = sub_reports[srn]
                 csv_file_name = osp.join(line_dir, srn) + ".csv"
                 sr.to_csv(csv_file_name, float_format="%.2f", index=False, na_rep="NaN")
+            line_xlsx = osp.join(
+                out_dir, line.line_str.replace("r:0", "r0").replace(":", "_") + ".xlsx"
+            )
+            wb = make_workbook_from_dict(sub_reports)
+            workbooks.append((line_xlsx, wb))
+        for line_xlsx, wb in workbooks:
+            print(f"Saving workbook to {fg.blue(line_xlsx)}")
+            wb.save(line_xlsx)
+
+
+def get_out_dir():
+    current_datetime = datetime.datetime.now()
+    directory_name = current_datetime.strftime("%Y-%m-%d_%H-%M-%S")
+    return osp.join("pious_reports", directory_name)
 
 
 def conf_callback(node: Node, actions: List[str], conf: AggregationConfig):
@@ -168,9 +181,7 @@ def make_line_directory(out_dir, line: Line) -> str:
     else:
         raise RuntimeError(f"Illegal line {line}: must be pious.pio.Line or str")
     line_str = line_str.replace("r:0", "r0").replace(":", "_")
-    print("outdir", out_dir)
     line_dir = osp.join(out_dir, line_str)
-    print(f"Making line_dir: {line_dir}")
     os.makedirs(line_dir)
     return line_dir
 

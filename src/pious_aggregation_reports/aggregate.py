@@ -2,6 +2,7 @@ from collections import defaultdict
 from os import path as osp
 from typing import List, Optional, Callable, Dict
 from multiprocessing import Pool
+from tqdm import tqdm
 
 import pandas as pd
 import numpy as np
@@ -90,11 +91,17 @@ def aggregate_files_in_dir(
     xs = db
 
     aggregator = ParallelFileAggregator(lines, conf, conf_callback, print_progress)
-    if print_progress:
-        xs = progress_bar(db, inc=1, prefix="Aggregating Boards: ")
     results = None
     with Pool(n_threads) as pool:
-        results: List[FileAggregationResult] = pool.starmap(aggregator, xs)
+        if print_progress:
+            results: List[FileAggregationResult] = tqdm(
+                pool.starmap(aggregator, db),
+                total=len(db),
+                ncols=150,
+                desc="Boards",
+            )
+        else:
+            results: List[FileAggregationResult] = pool.starmap(aggregator, xs)
     if results is None:
         print("\033[31;1mError\033[0m: Could not aggregate files")
 
@@ -298,25 +305,37 @@ def aggregate_lines_for_solver(
 
     reports: Dict[Line, pd.DataFrame] = {}
 
-    xs = lines_to_aggregate
-    if print_progress:
-        xs = progress_bar(lines_to_aggregate, inc=1, prefix="Aggregating Lines: ")
     if n_threads <= 1:
-        for line in xs:
-
-            reports[line] = aggregate_line_for_solver(
-                board, solver, line, conf, conf_callback, weight
-            )
+        if print_progress:
+            for line in tqdm(
+                lines_to_aggregate,
+                total=len(lines_to_aggregate),
+                ncols=100,
+                desc="Lines ",
+            ):
+                reports[line] = aggregate_line_for_solver(
+                    board, solver, line, conf, conf_callback, weight
+                )
+        else:
+            for line in lines_to_aggregate:
+                reports[line] = aggregate_line_for_solver(
+                    board, solver, line, conf, conf_callback, weight
+                )
     else:
 
         ctx = PoolAggregationContext(
             solver.cfr_file_path, board, conf, conf_callback, weight
         )
 
-        with Pool(processes=n_threads) as pool:
-            results = pool.map(ctx, xs)
-            return {line: df for (line, df) in zip(lines_to_aggregate, results)}
-        # ise e
+        if print_progress:
+            with Pool(processes=n_threads) as pool:
+                results = tqdm(pool.map(ctx, lines_to_aggregate), ncols=100)
+                return {line: df for (line, df) in zip(lines_to_aggregate, results)}
+        else:
+            with Pool(processes=n_threads) as pool:
+                results = pool.map(ctx, lines_to_aggregate)
+                return {line: df for (line, df) in zip(lines_to_aggregate, results)}
+
     return reports
 
 

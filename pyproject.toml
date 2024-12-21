@@ -16,6 +16,8 @@ dependencies = [
     "matplotlib>=3.7.1",
     "pandas>=2.0.3",
     "openpyxl>=3.1.5",
+    "tqdm>=4.67",
+    "ansi>=0.3.7"
 ]
 
 [project.scripts]

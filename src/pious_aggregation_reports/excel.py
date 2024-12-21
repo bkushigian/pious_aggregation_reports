@@ -1,3 +1,4 @@
+from typing import Dict
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils.dataframe import dataframe_to_rows
@@ -9,6 +10,7 @@ import pandas as pd
 from argparse import ArgumentParser
 import os
 from os import path as osp
+from ansi.color import fg
 
 CARD_COLUMN_WIDTH = 3.75
 ACTION_COLUMN_WIDTH = 8
@@ -217,47 +219,45 @@ def main():
     )
 
     args = parser.parse_args()
-    dir = args.dir
+    wb = make_workbook_from_dir(args.dir)
+    out = args.out
+    if not out.endswith(".xlsx"):
+        out = f"{out}.xlsx"
+    wb.save(out)
+    print(fg.green("Dataframes added to workbook!"))
 
-    files = os.listdir(dir)
 
+WB_SHEET_ORDER = [
+    "Aggregation",
+    "Overview",
+    "Nothing",
+    "Pairs",
+    "OverPair",
+    "TopPair",
+    "UnderPair(1)",
+    "2ndPair",
+    "UnderPair(2)",
+    "3rdPair",
+    "UnderPair(3)",
+    "4thPair",
+    "UnderPair(4)",
+    "5thPair",
+    "UnderPair(5)",
+]
+
+
+def make_workbook_from_dict(sub_sheets_map: Dict[str, pd.DatetimeIndex]) -> Workbook:
+    print(fg.green(f"Making workbook from dict"))
+    one_decimal_style = NamedStyle(name="one_decimal_style", number_format="0.0")
     wb = Workbook()
     ws = None
-    one_decimal_style = NamedStyle(name="one_decimal_style", number_format="0.0")
-    file_order = [
-        "Aggregation",
-        "Overview",
-        "Nothing",
-        "Pairs",
-        "OverPair",
-        "TopPair",
-        "UnderPair(1)",
-        "2ndPair",
-        "UnderPair(2)",
-        "3rdPair",
-        "UnderPair(3)",
-        "4thPair",
-        "UnderPair(4)",
-        "5thPair",
-        "UnderPair(5)",
-    ]
-    unvisited = {f for f in files if f.endswith(".csv")}
-
-    for file_base in file_order:
-        file = file_base + ".csv"
-        if file not in unvisited:
+    unvisited_keys = set(sub_sheets_map.keys())
+    for title in WB_SHEET_ORDER:
+        print(f" - Processing subsheet {fg.boldwhite(title)}")
+        if title not in sub_sheets_map:
             continue
-        unvisited.remove(file)
-
-        rel_path = osp.join(dir, file)
-        path = osp.abspath(rel_path)
-        try:
-            df = pd.read_csv(path)
-        except pd.errors.EmptyDataError:
-            continue
-        if len(df.columns) <= 1:
-            continue
-        title = file[:-4]
+        unvisited_keys.remove(title)
+        df = sub_sheets_map[title]
         if ws is None:
             ws = wb.active
             ws.title = title
@@ -305,14 +305,37 @@ def main():
         format_card_columns(ws)
         format_cells_as_bars(ws, col_types, max_depth)
         recursively_merge_headers(row_idx=1, col_idx=1)
+    if len(unvisited_keys) > 0:
+        print(f"Warning: unprocessed subsheets: {unvisited_keys}")
 
-    if len(unvisited) > 0:
-        print(f"Warning: unprocessed CSVs: {unvisited}")
-    out = args.out
-    if not out.endswith(".xlsx"):
-        out = f"{out}.xlsx"
-    wb.save(out)
-    print("Dataframes added to workbook!")
+    return wb
+
+
+def make_workbook_from_dir(dir: str):
+    print(fg.green(f"Making workbook from {dir}\033[0m"))
+    files = os.listdir(dir)
+    unvisited_files = {f for f in files if f.endswith(".csv")}
+
+    d = {}
+    for file_base in WB_SHEET_ORDER:
+        file = file_base + ".csv"
+        if file not in unvisited_files:
+            continue
+        unvisited_files.remove(file)
+
+        rel_path = osp.join(dir, file)
+        path = osp.abspath(rel_path)
+        try:
+            df = pd.read_csv(path)
+        except pd.errors.EmptyDataError:
+            continue
+        if len(df.columns) <= 1:
+            continue
+        title = file[:-4]
+        d[title] = df
+    if len(unvisited_files) > 0:
+        print(f"{fg.yellow(Warning)}: unprocessed CSVs: {unvisited_files}")
+    return make_workbook_from_dict(d)
 
 
 if __name__ == "__main__":
