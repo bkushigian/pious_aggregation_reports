@@ -165,38 +165,8 @@ def format_cells_as_bars(ws: Worksheet, col_types, header_height):
 
 
 def process_df(df: pd.DataFrame, ws: Worksheet) -> int:
-    n_columns = len(df.columns)
 
     max_depth, col_types = add_headers(df, ws)
-
-    # Now merge, starting at the top
-    def recursively_merge_headers(row_idx, col_idx, max_columns=None):
-        if max_columns is None:
-            max_columns = n_columns
-        if row_idx > max_depth:
-            return col_idx
-        while col_idx < max_columns:
-            cell = ws.cell(row=row_idx, column=col_idx)
-            value = cell.value
-            v = value
-            right = col_idx
-            while right < n_columns and v == value and str(value) != "":
-                right += 1
-                cell = ws.cell(row=row_idx, column=right)
-                v = cell.value
-
-            if right > col_idx + 1:
-                ws.merge_cells(
-                    start_row=row_idx,
-                    start_column=col_idx,
-                    end_row=row_idx,
-                    end_column=right - 1,
-                )
-                # Now recursively merge subcolumns
-                recursively_merge_headers(row_idx + 1, col_idx, right)
-            col_idx = right
-
-    recursively_merge_headers(row_idx=1, col_idx=1)
 
     freeze_row(ws, max_depth + 1)
     return max_depth, col_types
@@ -235,6 +205,7 @@ def main():
         "UnderPair(5)",
     ]
     unvisited = {f for f in files if f.endswith(".csv")}
+
     for file_base in file_order:
         file = file_base + ".csv"
         if file not in unvisited:
@@ -261,8 +232,39 @@ def main():
             for c_idx, value in enumerate(row, start=1):
                 cell = ws.cell(row=r_idx, column=c_idx, value=value)
                 cell.style = one_decimal_style
+
+        # Now merge, starting at the top
+        def recursively_merge_headers(row_idx, col_idx, max_columns=None):
+            if max_columns is None:
+                max_columns = n_columns
+            if row_idx > max_depth:
+                return col_idx
+            while col_idx < max_columns:
+                cell = ws.cell(row=row_idx, column=col_idx)
+                value = cell.value
+                v = value
+                right = col_idx
+                while right < n_columns and v == value and str(value) != "":
+                    right += 1
+                    cell = ws.cell(row=row_idx, column=right)
+                    v = cell.value
+
+                if right > col_idx + 1:
+                    ws.merge_cells(
+                        start_row=row_idx,
+                        start_column=col_idx,
+                        end_row=row_idx,
+                        end_column=right - 1,
+                    )
+                    # Now recursively merge subcolumns
+                    recursively_merge_headers(row_idx + 1, col_idx, right)
+                col_idx = right
+
+        n_columns = len(df.columns)
+
         format_card_columns(ws)
         format_cells_as_bars(ws, col_types, max_depth)
+        recursively_merge_headers(row_idx=1, col_idx=1)
 
     if len(unvisited) > 0:
         print(f"Warning: unprocessed CSVs: {unvisited}")

@@ -283,7 +283,8 @@ def action_freqs_closure(
 
 def compute_extra_columns(node: Node, actions: List[str]):
     board = node.board
-    can_fold = ("f" in actions,)
+    can_fold = "f" in actions
+    can_check_call = "c" in actions
     can_bet_raise = False
     for a in actions:
         if a.startswith("b"):
@@ -297,7 +298,7 @@ def compute_extra_columns(node: Node, actions: List[str]):
         board,
         actions=actions,
         measure_b=can_bet_raise,
-        measure_c=can_fold,
+        measure_c=can_check_call,
         measure_f=can_fold,
         measure_backdoors=measure_bdfd,
     )
