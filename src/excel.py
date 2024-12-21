@@ -218,6 +218,8 @@ def main():
             df = pd.read_csv(path)
         except pd.errors.EmptyDataError:
             continue
+        if len(df.columns) <= 1:
+            continue
         title = file[:-4]
         if ws is None:
             ws = wb.active
