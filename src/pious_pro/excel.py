@@ -11,6 +11,8 @@ from argparse import ArgumentParser
 import os
 from os import path as osp
 from ansi.color import fg
+from tqdm import tqdm
+from .trial import *
 
 CARD_COLUMN_WIDTH = 3.75
 ACTION_COLUMN_WIDTH = 8
@@ -73,32 +75,39 @@ def add_headers(df: pd.DataFrame, ws: Worksheet):
 def format_card_columns(ws: Worksheet) -> int:
     column_names = ("flop", "turn", "river")
     suit_symbols = {"h": "♥", "d": "♦", "s": "♠", "c": "♣"}
-    suit_colors = {"h": "AA1200", "d": "0000FF", "s": "000000", "c": "00AA23"}
+    suit_colors = {
+        "h": Font(color="AA1200"),
+        "d": Font(color="0000FF"),
+        "s": Font(color="000000"),
+        "c": Font(color="00AA23"),
+    }
+    card_map = {}
+    for r in "23456789TJQKA":
+        for s in "hdsc":
+            card = f"{r}{suit_symbols[s]}"
+            font = suit_colors[s]
+            card_map[f"{r}{s}"] = (card, font)
     max_card_col_index = 0
-    for col_idx in range(1, 7):
+    for col_idx, col in enumerate(
+        ws.iter_cols(min_row=2, max_row=ws.max_row, max_col=6), start=1
+    ):
         cell = ws.cell(row=2, column=col_idx)
         if str(cell.value).lower() in column_names:
             col_letter = get_column_letter(col_idx)
             ws.column_dimensions[col_letter].width = CARD_COLUMN_WIDTH
             max_card_col_index += 1
-            row_idx = 4
-            while row_idx <= ws.max_row:
-                cell = ws.cell(row=row_idx, column=col_idx)
+
+            for row_idx, cell in enumerate(col[3:], start=4):
+                if row_idx % 100 == 0:
+                    print(
+                        f"\r      {col_idx}, {row_idx}/{ws.max_row} ({100 *row_idx/ws.max_row:5.1f}%)",
+                        end="",
+                    )
                 v = cell.value
                 if v is not None:
-                    v = str(cell.value)
-                    xs = []
-                    for i in range(0, len(v), 2):
-                        rank = v[i]
-                        suit = v[i + 1]
-                        sym = suit_symbols.get(suit, "?")
-                        color = suit_colors.get(suit, "000000")
-                        card_text = f"{rank}{sym}"
-                        xs.append(card_text)
-
-                    joined = " ".join(xs)
-                    cell = ws.cell(row=row_idx, column=col_idx, value=joined)
-                    cell.font = Font(color=color)
+                    card, font = card_map[v]
+                    cell = ws.cell(row=row_idx, column=col_idx, value=card)
+                    cell.font = font
                 row_idx += 1
 
     # Now, freeze these columns
@@ -211,6 +220,12 @@ def process_df(df: pd.DataFrame, ws: Worksheet) -> int:
     return max_depth, col_types
 
 
+def make_directory_for_path(path):
+    d = osp.dirname(path)
+    print("dir", d)
+    os.makedirs(d)
+
+
 def main():
     parser = ArgumentParser()
     parser.add_argument("dir", help="directory to turn into workbook")
@@ -223,6 +238,7 @@ def main():
     out = args.out
     if not out.endswith(".xlsx"):
         out = f"{out}.xlsx"
+    make_directory_for_path(out)
     wb.save(out)
     print(fg.green("Dataframes added to workbook!"))
 
@@ -255,6 +271,7 @@ def make_workbook_from_dict(sub_sheets_map: Dict[str, pd.DatetimeIndex]) -> Work
     for title in WB_SHEET_ORDER:
         print(f" - Processing subsheet {fg.boldwhite(title)}")
         if title not in sub_sheets_map:
+            print(fg.yellow(f"   No CSV for {title}"))
             continue
         unvisited_keys.remove(title)
         df = sub_sheets_map[title]
@@ -266,8 +283,9 @@ def make_workbook_from_dict(sub_sheets_map: Dict[str, pd.DatetimeIndex]) -> Work
 
         df = process_card_columns(df)
         max_depth, col_types = process_df(df, ws)
-        for r_idx, row in enumerate(
-            dataframe_to_rows(df, index=False, header=False), start=max_depth + 1
+        rows = list(dataframe_to_rows(df, index=False, header=False))
+        for r_idx, row in tqdm(
+            enumerate(rows, start=max_depth + 1), total=len(rows), ncols=150
         ):
             for c_idx, value in enumerate(row, start=1):
                 cell = ws.cell(row=r_idx, column=c_idx, value=value)
@@ -302,8 +320,11 @@ def make_workbook_from_dict(sub_sheets_map: Dict[str, pd.DatetimeIndex]) -> Work
 
         n_columns = len(df.columns)
 
+        print("   - Formatting Card Columns")
         format_card_columns(ws)
+        print("   - Formatting Cells as Bars")
         format_cells_as_bars(ws, col_types, max_depth)
+        print("   - Merging Headers")
         recursively_merge_headers(row_idx=1, col_idx=1)
     if len(unvisited_keys) > 0:
         print(f"Warning: unprocessed subsheets: {unvisited_keys}")

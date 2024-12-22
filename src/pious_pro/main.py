@@ -5,16 +5,18 @@ import shutil
 import sys
 from typing import Callable, Dict, List, Optional, Tuple
 import tabulate
-from pious.pio import Line, Node
+from pious.pio import Line, Node, make_solver
 from pious.pio.aggregate import LinesToAggregate, AggregationConfig, SpotData
-from .aggregate import aggregate_files_in_dir, aggregate_single_file
 from pious.hand_categories import HandCategorizer
+from pious.conf import pious_conf
 import textwrap
 import numpy as np
 import pandas as pd
 import time
 from ansi.color import fg
+from .aggregate import aggregate_files_in_dir, aggregate_single_file
 from .excel import make_workbook_from_dict
+from .trial import *
 import datetime
 
 banner = f"""
@@ -23,6 +25,15 @@ Create an aggregation report
 
 
 CACHING = True
+
+
+def print_header():
+    s = make_solver()
+    print(f"PioSOLVER Install Location: {pious_conf.pio_install_directory}")
+    print(f"PioSOLVER Version: {pious_conf.pio_version_no}")
+    print(f"PioSOLVER Executable: {pious_conf.get_pio_solver_name()}")
+    v = s._run("show_version")
+    print(f"VERSION: {v}")
 
 
 def main():
@@ -51,6 +62,7 @@ def main():
     if args.no_caching:
         CACHING = False
 
+    print_header()
     if not osp.exists(args.cfr_file_or_sim_dir):
         print(f"No such file or directory {args.cfr_file_or_sim_dir}")
         exit(-1)

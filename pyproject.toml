@@ -1,5 +1,5 @@
 [project]
-name = "pious_aggregation_reports"
+name = "pious_pro"
 version = "0.0.1"
 authors = [{ name = "Ben Kushigian", email = "bkushigian@gmail.com" }]
 description = "Build agg reports with Pious"
@@ -17,12 +17,13 @@ dependencies = [
     "pandas>=2.0.3",
     "openpyxl>=3.1.5",
     "tqdm>=4.67",
-    "ansi>=0.3.7"
+    "ansi>=0.3.7",
+    "scikit-learn>=1.6.0"
 ]
 
 [project.scripts]
-aggregate = "pious_aggregation_reports.__main__:main"
-excel = "pious_aggregation_reports.excel:main"
+aggregate = "pious_pro.__main__:main"
+excel = "pious_pro.excel:main"
 
 [project.urls]
 Issues = "https://github.com/bkushigian/Pious/issues"
