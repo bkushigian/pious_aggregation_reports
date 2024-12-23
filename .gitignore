@@ -11,3 +11,6 @@ secrets/*
 *.xlsx
 *.xlsx#
 .vscode
+
+pious_reports/
+dist/
