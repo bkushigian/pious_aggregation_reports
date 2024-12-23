@@ -92,16 +92,12 @@ def format_card_columns(ws: Worksheet) -> int:
         ws.iter_cols(min_row=2, max_row=ws.max_row, max_col=5), start=1
     ):
         cell = ws.cell(row=2, column=col_idx)
-        print(cell, cell.value)
         if str(cell.value).lower() in column_names:
-            print(cell, cell.value)
             col_letter = get_column_letter(col_idx)
             ws.column_dimensions[col_letter].width = CARD_COLUMN_WIDTH
             max_card_col_index += 1
 
-            print(col)
             for row_idx, cell in enumerate(col[2:], start=4):
-                print(row_idx, cell, cell.value)
                 if row_idx % 100 == 0:
                     print(
                         f"\r      {col_idx}, {row_idx}/{ws.max_row} ({100 *row_idx/ws.max_row:5.1f}%)",
@@ -287,9 +283,7 @@ def make_workbook_from_dict(sub_sheets_map: Dict[str, pd.DatetimeIndex]) -> Work
         df = process_card_columns(df)
         max_depth, col_types = process_df(df, ws)
         rows = list(dataframe_to_rows(df, index=False, header=False))
-        for r_idx, row in tqdm(
-            enumerate(rows, start=max_depth + 1), total=len(rows), ncols=150
-        ):
+        for r_idx, row in tqdm(enumerate(rows, start=max_depth + 1), total=len(rows)):
             for c_idx, value in enumerate(row, start=1):
                 cell = ws.cell(row=r_idx, column=c_idx, value=value)
                 cell.style = one_decimal_style
