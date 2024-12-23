@@ -414,8 +414,8 @@ def get_hand_category_functions(
 
     overview_cats = []
 
-    for kicker_idx, ht_name in enumerate(hand_types):
-        ht_str = f"hand_type == {kicker_idx}"
+    for hand_type_idx, ht_name in enumerate(hand_types):
+        ht_str = f"hand_type == {hand_type_idx}"
         overview_cats += ht_freqs(ht_name, ht_str)
     overview_cats += ht_freqs("Combo", is_combo_str)
     overview_cats += ht_freqs("FD", is_fd_str)
@@ -446,9 +446,9 @@ def get_hand_category_functions(
 
     nothing_cats += ht_freqs("J-High:All", ht_str, "hr1 == 11")
     nothing_cats += ht_freqs("T-High:All", ht_str, "hr1 == 10")
-    for kicker_idx in range(5):
+    for hand_type_idx in range(5):
         nothing_cats += ht_freqs(
-            f"BoardGroup:[{kicker_idx}]", f"high_card_1_type == {kicker_idx}"
+            f"BoardGroup:[{hand_type_idx}]", f"high_card_1_type == {hand_type_idx}"
         )
     # Compute Draws
     nothing_cats += ht_freqs(f"Combo", ht_str, is_combo_str)
@@ -509,9 +509,9 @@ def get_hand_category_functions(
         if "underpair" in name.lower() or "overpair" in name.lower():
             pass
         else:
-            for kicker_idx in range(1, 12):
-                kicker_str = f"pair_kicker == {kicker_idx}"
-                pair_subcats += ht_freqs(f"[{kicker_idx}]", ht_str, kicker_str)
+            for hand_type_idx in range(1, 12):
+                kicker_str = f"pair_kicker == {hand_type_idx}"
+                pair_subcats += ht_freqs(f"[{hand_type_idx}]", ht_str, kicker_str)
 
         pair_subcats += ht_freqs("FD", ht_str, is_fd_str)
         pair_subcats += ht_freqs("SD", ht_str, is_sd_str)
