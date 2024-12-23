@@ -89,15 +89,19 @@ def format_card_columns(ws: Worksheet) -> int:
             card_map[f"{r}{s}"] = (card, font)
     max_card_col_index = 0
     for col_idx, col in enumerate(
-        ws.iter_cols(min_row=2, max_row=ws.max_row, max_col=6), start=1
+        ws.iter_cols(min_row=2, max_row=ws.max_row, max_col=5), start=1
     ):
         cell = ws.cell(row=2, column=col_idx)
+        print(cell, cell.value)
         if str(cell.value).lower() in column_names:
+            print(cell, cell.value)
             col_letter = get_column_letter(col_idx)
             ws.column_dimensions[col_letter].width = CARD_COLUMN_WIDTH
             max_card_col_index += 1
 
-            for row_idx, cell in enumerate(col[3:], start=4):
+            print(col)
+            for row_idx, cell in enumerate(col[2:], start=4):
+                print(row_idx, cell, cell.value)
                 if row_idx % 100 == 0:
                     print(
                         f"\r      {col_idx}, {row_idx}/{ws.max_row} ({100 *row_idx/ws.max_row:5.1f}%)",
@@ -108,7 +112,6 @@ def format_card_columns(ws: Worksheet) -> int:
                     card, font = card_map[v]
                     cell = ws.cell(row=row_idx, column=col_idx, value=card)
                     cell.font = font
-                row_idx += 1
 
     # Now, freeze these columns
     freeze_column(ws, max_card_col_index + 1)
