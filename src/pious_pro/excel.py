@@ -89,7 +89,7 @@ def format_card_columns(ws: Worksheet) -> int:
             card_map[f"{r}{s}"] = (card, font)
     max_card_col_index = 0
     for col_idx, col in enumerate(
-        ws.iter_cols(min_row=2, max_row=ws.max_row, max_col=6), start=1
+        ws.iter_cols(min_row=2, max_row=ws.max_row + 1, max_col=6), start=1
     ):
         cell = ws.cell(row=2, column=col_idx)
         if str(cell.value).lower() in column_names:
