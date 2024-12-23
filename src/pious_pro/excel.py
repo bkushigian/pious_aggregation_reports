@@ -268,7 +268,6 @@ def make_workbook_from_dict(sub_sheets_map: Dict[str, pd.DatetimeIndex]) -> Work
     ws = None
     unvisited_keys = set(sub_sheets_map.keys())
     for title in WB_SHEET_ORDER:
-        print(f" - Processing subsheet {fg.boldwhite(title)}")
         if title not in sub_sheets_map:
             print(fg.yellow(f"   No CSV for {title}"))
             continue
@@ -283,7 +282,11 @@ def make_workbook_from_dict(sub_sheets_map: Dict[str, pd.DatetimeIndex]) -> Work
         df = process_card_columns(df)
         max_depth, col_types = process_df(df, ws)
         rows = list(dataframe_to_rows(df, index=False, header=False))
-        for r_idx, row in tqdm(enumerate(rows, start=max_depth + 1), total=len(rows)):
+        for r_idx, row in tqdm(
+            enumerate(rows, start=max_depth + 1),
+            total=len(rows),
+            desc=fg.boldcyan(f"{title:13}"),
+        ):
             for c_idx, value in enumerate(row, start=1):
                 cell = ws.cell(row=r_idx, column=c_idx, value=value)
                 cell.style = one_decimal_style
@@ -317,11 +320,11 @@ def make_workbook_from_dict(sub_sheets_map: Dict[str, pd.DatetimeIndex]) -> Work
 
         n_columns = len(df.columns)
 
-        print("   - Formatting Card Columns")
+        # print("   - Formatting Card Columns")
         format_card_columns(ws)
-        print("   - Formatting Cells as Bars")
+        # print("   - Formatting Cells as Bars")
         format_cells_as_bars(ws, col_types, max_depth)
-        print("   - Merging Headers")
+        # print("   - Merging Headers")
         recursively_merge_headers(row_idx=1, col_idx=1)
     if len(unvisited_keys) > 0:
         print(f"Warning: unprocessed subsheets: {unvisited_keys}")
