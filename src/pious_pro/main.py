@@ -422,9 +422,9 @@ def get_hand_category_functions(
     overview_cats += ht_freqs("SD", is_sd_str)
     overview_cats += ht_freqs("BDFD", is_bdfd_str)
 
-    ##############################
-    # Compute High Card Category #
-    ##############################
+    ############################
+    # Compute Nothing Category #
+    ############################
 
     nothing_cats = []
     nothing_cats += ht_freqs("Nothing", "hand_type == 0")
