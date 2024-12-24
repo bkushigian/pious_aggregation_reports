@@ -1,6 +1,6 @@
 [project]
 name = "pious_pro"
-version = "0.0.2"
+version = "0.0.3"
 authors = [{ name = "Ben Kushigian", email = "bkushigian@gmail.com" }]
 description = "Build agg reports with Pious"
 readme = "README.md"
@@ -22,7 +22,9 @@ dependencies = [
 ]
 
 [project.scripts]
-aggregate = "pious_pro.__main__:main"
+pp = "pious_pro.__main__:main"
+pious_pro = "pious_pro.__main__:main"
+aggregate = "pious_pro.aggregate:main"
 excel = "pious_pro.excel:main"
 
 [project.urls]
