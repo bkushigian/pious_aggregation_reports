@@ -447,6 +447,7 @@ def main():
 
     parser.add_argument(
         "cfr_file_or_sim_dir",
+        default=".",
         help="Either a cfr file (for a single file aggregation report) or a directory containing cfr files",
     )
     parser.add_argument("lines", nargs="*", help="Explicit nodes to add")
@@ -458,12 +459,7 @@ def main():
     )
     parser.add_argument("--progress", action="store_true", help="Print progress bar")
     parser.add_argument("--n_cores", type=int, default=1, help="Number of cores to use")
-    parser.add_argument(
-        "--no_caching", action="store_true", help="Helper argument for testing"
-    )
     args = parser.parse_args()
-    if args.no_caching:
-        CACHING = False
 
     run(args)
 
