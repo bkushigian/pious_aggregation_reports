@@ -1,20 +1,23 @@
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from os import path as osp
 import os
 import shutil
 import sys
 from typing import Callable, Dict, List, Optional, Tuple
 import tabulate
-from pious.pio import Line, Node
+from pious.pio import Line, Node, make_solver
 from pious.pio.aggregate import LinesToAggregate, AggregationConfig, SpotData
-from .aggregate import aggregate_files_in_dir, aggregate_single_file
 from pious.hand_categories import HandCategorizer
+from pious.conf import pious_conf
 import textwrap
 import numpy as np
 import pandas as pd
 import time
 from ansi.color import fg
+from .aggregate import aggregate_files_in_dir, aggregate_single_file
 from .excel import make_workbook_from_dict
+from .trial import *
+from .version import version, pious_version
 import datetime
 
 banner = f"""
@@ -23,6 +26,15 @@ Create an aggregation report
 
 
 CACHING = True
+
+
+def print_header():
+    s = make_solver()
+    print(f"PioSOLVER Install Location: {pious_conf.pio_install_directory}")
+    print(f"PioSOLVER Version: {pious_conf.pio_version_no}")
+    print(f"PioSOLVER Executable: {pious_conf.get_pio_solver_name()}")
+    v = s._run("show_version")
+    print(f"VERSION: {v}")
 
 
 def main():
@@ -51,6 +63,7 @@ def main():
     if args.no_caching:
         CACHING = False
 
+    print_header()
     if not osp.exists(args.cfr_file_or_sim_dir):
         print(f"No such file or directory {args.cfr_file_or_sim_dir}")
         exit(-1)
@@ -133,6 +146,7 @@ def main():
         print("Creating dir", out_dir)
         os.makedirs(out_dir)
         workbooks = []
+        write_metadata(out_dir, args, lines, t1 - t0)
         for line in reports:
             df = reports[line]
             line_dir = make_line_directory(out_dir, line)
@@ -149,6 +163,20 @@ def main():
         for line_xlsx, wb in workbooks:
             print(f"Saving workbook to {fg.blue(line_xlsx)}")
             wb.save(line_xlsx)
+
+
+def write_metadata(out_dir: str, args: Namespace, lines, t: float):
+    with open(osp.join(out_dir, "info.txt"), "w+") as f:
+        f.write(f"file: {args.cfr_file_or_sim_dir}\n")
+        f.write(f"n_cores: {args.n_cores}\n")
+        f.write(f"pious_pro_version: {version()}\n")
+        f.write(f"pious_version: {pious_version()}\n")
+        f.write(f"lines: {lines.lines}\n")
+        f.write(f"lines.flop: {lines.flop}\n")
+        f.write(f"lines.turn: {lines.turn}\n")
+        f.write(f"lines.river: {lines.river}\n")
+        f.write(f"ran in: {t:5.1f} seconds")
+        pass
 
 
 def get_out_dir():
@@ -386,41 +414,41 @@ def get_hand_category_functions(
 
     overview_cats = []
 
-    for kicker_idx, ht_name in enumerate(hand_types):
-        ht_str = f"hand_type == {kicker_idx}"
+    for hand_type_idx, ht_name in enumerate(hand_types):
+        ht_str = f"hand_type == {hand_type_idx}"
         overview_cats += ht_freqs(ht_name, ht_str)
     overview_cats += ht_freqs("Combo", is_combo_str)
     overview_cats += ht_freqs("FD", is_fd_str)
     overview_cats += ht_freqs("SD", is_sd_str)
     overview_cats += ht_freqs("BDFD", is_bdfd_str)
 
-    ##############################
-    # Compute High Card Category #
-    ##############################
+    ############################
+    # Compute Nothing Category #
+    ############################
 
     nothing_cats = []
     nothing_cats += ht_freqs("Nothing", "hand_type == 0")
     ht_str = "hand_type == 0"
-    nothing_cats += ht_freqs("A-High:All", "hr1 == 14")
-    nothing_cats += ht_freqs("A-High:H", "hr1 == 14", "hr2 >= 10")
-    nothing_cats += ht_freqs("A-High:M", "hr1 == 14", "hr2 < 10 and hr2 >= 6")
-    nothing_cats += ht_freqs("A-High:L", "hr1 == 14", "hr2 <= 5")
+    nothing_cats += ht_freqs("A-High:All", ht_str, "hr1 == 14")
+    nothing_cats += ht_freqs("A-High:H", ht_str, "hr1 == 14 and hr2 >= 10")
+    nothing_cats += ht_freqs("A-High:M", ht_str, "hr1 == 14 and hr2 < 10 and hr2 >= 6")
+    nothing_cats += ht_freqs("A-High:L", ht_str, "hr1 == 14 and hr2 <= 5")
 
-    nothing_cats += ht_freqs("K-High:All", "hr1 == 13")
-    nothing_cats += ht_freqs("K-High:H", "hr1 == 13", "hr2 >= 10")
-    nothing_cats += ht_freqs("K-High:M", "hr1 == 13", "hr2 < 10 and hr2 >= 6")
-    nothing_cats += ht_freqs("K-High:L", "hr1 == 13", "hr2 <= 5")
+    nothing_cats += ht_freqs("K-High:All", ht_str, "hr1 == 13")
+    nothing_cats += ht_freqs("K-High:H", ht_str, "hr1 == 13 and hr2 >= 10")
+    nothing_cats += ht_freqs("K-High:M", ht_str, "hr1 == 13 and hr2 < 10 and hr2 >= 6")
+    nothing_cats += ht_freqs("K-High:L", ht_str, "hr1 == 13 and hr2 <= 5")
 
-    nothing_cats += ht_freqs("Q-High:All", "hr1 == 12")
-    nothing_cats += ht_freqs("Q-High:H", "hr1 == 12", "hr2 >= 10")
-    nothing_cats += ht_freqs("Q-High:M", "hr1 == 12", "hr2 < 10 and hr2 >= 6")
-    nothing_cats += ht_freqs("Q-High:L", "hr1 == 12", "hr2 <= 5")
+    nothing_cats += ht_freqs("Q-High:All", ht_str, "hr1 == 12")
+    nothing_cats += ht_freqs("Q-High:H", ht_str, "hr1 == 12 and hr2 >= 10")
+    nothing_cats += ht_freqs("Q-High:M", ht_str, "hr1 == 12 and hr2 < 10 and hr2 >= 6")
+    nothing_cats += ht_freqs("Q-High:L", ht_str, "hr1 == 12 and hr2 <= 5")
 
-    nothing_cats += ht_freqs("J-High:All", "hr1 == 11")
-    nothing_cats += ht_freqs("T-High:All", "hr1 == 10")
-    for kicker_idx in range(5):
+    nothing_cats += ht_freqs("J-High:All", ht_str, "hr1 == 11")
+    nothing_cats += ht_freqs("T-High:All", ht_str, "hr1 == 10")
+    for hand_type_idx in range(5):
         nothing_cats += ht_freqs(
-            f"BoardGroup:[{kicker_idx}]", f"high_card_1_type == {kicker_idx}"
+            f"BoardGroup:[{hand_type_idx}]", f"high_card_1_type == {hand_type_idx}"
         )
     # Compute Draws
     nothing_cats += ht_freqs(f"Combo", ht_str, is_combo_str)
@@ -441,10 +469,10 @@ def get_hand_category_functions(
         nothing_cats += ht_freqs(f"TwoOvers:BDSD", two_overs_str, is_bdsd_str)
     # Overs and Unders
     over_under = f"{over_1_ht} and {under_2_ht}"
-    nothing_cats += ht_freqs(f"Over&Under:All", over_under)
+    nothing_cats += ht_freqs(f"OverUnder:All", over_under)
     if measure_backdoors:
-        nothing_cats += ht_freqs(f"OverUnder:BDFD", is_bdfd_str)
-        nothing_cats += ht_freqs(f"OverUnder:BDSD", is_bdsd_str)
+        nothing_cats += ht_freqs(f"OverUnder:BDFD", over_under, is_bdfd_str)
+        nothing_cats += ht_freqs(f"OverUnder:BDSD", over_under, is_bdsd_str)
 
     #########################
     # Compute Pair Category #
@@ -481,9 +509,9 @@ def get_hand_category_functions(
         if "underpair" in name.lower() or "overpair" in name.lower():
             pass
         else:
-            for kicker_idx in range(1, 12):
-                kicker_str = f"pair_kicker == {kicker_idx}"
-                pair_subcats += ht_freqs(f"[{kicker_idx}]", ht_str, kicker_str)
+            for hand_type_idx in range(1, 12):
+                kicker_str = f"pair_kicker == {hand_type_idx}"
+                pair_subcats += ht_freqs(f"[{hand_type_idx}]", ht_str, kicker_str)
 
         pair_subcats += ht_freqs("FD", ht_str, is_fd_str)
         pair_subcats += ht_freqs("SD", ht_str, is_sd_str)

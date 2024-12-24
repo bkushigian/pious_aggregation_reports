@@ -194,6 +194,7 @@ def aggregate_line_for_solver(
     weight: float = 1.0,
 ):
     try:
+        print(board)
         node_ids = line.get_node_ids(dead_cards=board)
 
         # Get the first node_id to compute some global stuff about the line
